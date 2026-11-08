@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon --watch src --watch .env --ext js,json,env src/server.js"
+    "dev": "nodemon --watch src --watch .env --ext js,json,env src/server.js",
+    "test": "node --test src/routes/checkout.test.js src/routes/orders.test.js src/routes/admin.test.js src/routes/deliveries.test.js src/routes/applications.test.js"
   },
   "engines": {
     "node": ">=20"

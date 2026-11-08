@@ -22,6 +22,10 @@ const storeSchema = new mongoose.Schema({
   openHours: { type: String, trim: true, default: "" },
   isActive: { type: Boolean, default: true, index: true },
   isApproved: { type: Boolean, default: false, index: true },
+  approvalStatus: { type: String, enum: ["pending", "approved", "rejected"], default: "pending", index: true },
+  approvalReason: { type: String, trim: true, maxlength: 500, default: "" },
+  suspensionReason: { type: String, trim: true, maxlength: 500, default: "" },
+  suspendedAt: { type: Date, default: null },
 }, { timestamps: true, versionKey: false });
 
 storeSchema.index({ "address.location": "2dsphere" }, { sparse: true });

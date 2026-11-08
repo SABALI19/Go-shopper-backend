@@ -6,7 +6,7 @@ import { asyncHandler } from "../middleware/asyncHandler.js";
 import { getUserRole, requireAuth, requireRoles } from "../middleware/auth.js";
 
 export const storesRouter = Router();
-const editableStoreFields = ["name", "category", "tagline", "description", "logoUrl", "coverImageUrl", "categories", "brandValues", "address", "openHours", "isActive"];
+const editableStoreFields = ["name", "category", "tagline", "description", "logoUrl", "coverImageUrl", "categories", "brandValues", "address", "openHours"];
 const editableProductFields = ["name", "description", "category", "imageUrl", "priceKobo", "stockQuantity", "isAvailable"];
 
 storesRouter.get("/", asyncHandler(async (req, res) => {
@@ -16,27 +16,22 @@ storesRouter.get("/", asyncHandler(async (req, res) => {
   const stores = (await Store.find(filter).sort({ name: 1 }).limit(100).lean()).map((store) => ({ ...store, id: store.slug }));
   res.json({ stores });
 }));
-
 storesRouter.get("/mine", requireAuth, asyncHandler(async (req, res) => {
   const auth = req.auth || getAuth(req);
   const role = await getUserRole(auth);
   const filter = role === "admin" ? {} : { ownerClerkUserId: auth.userId };
-  const stores = (await Store.find(filter).sort({ createdAt: -1 }).lean()).map((store) => ({ ...store, id: store.slug }));
+  const stores = (await Store.find(filter).sort({ createdAt: -1 }).lean()).map((store) => ({
+    id: store.slug,
+    slug: store.slug,
+    name: store.name,
+    category: store.category,
+    tagline: store.tagline,
+    logoUrl: store.logoUrl,
+    isActive: store.isActive,
+    isApproved: store.isApproved,
+    openHours: store.openHours,
+  }));
   res.json({ stores });
-}));
-
-storesRouter.get("/admin/all", requireAuth, requireRoles("admin"), asyncHandler(async (req, res) => {
-  const stores = (await Store.find().sort({ createdAt: -1 }).limit(200).lean()).map((store) => ({ ...store, id: store.slug }));
-  res.json({ stores });
-}));
-
-storesRouter.patch("/admin/:storeId/approval", requireAuth, requireRoles("admin"), asyncHandler(async (req, res) => {
-  if (typeof req.body?.isApproved !== "boolean") return res.status(400).json({ error: { code: "INVALID_APPROVAL", message: "isApproved must be true or false" } });
-  const key = req.params.storeId;
-  const query = /^[a-f\d]{24}$/i.test(key) ? { _id: key } : { slug: key.toLowerCase() };
-  const store = await Store.findOneAndUpdate(query, { $set: { isApproved: req.body.isApproved } }, { new: true, runValidators: true });
-  if (!store) return res.status(404).json({ error: { code: "STORE_NOT_FOUND", message: "Store not found" } });
-  res.json({ store: { ...store.toObject(), id: store.slug } });
 }));
 
 storesRouter.post("/", requireAuth, requireRoles("supermarket", "admin"), asyncHandler(async (req, res) => {
@@ -46,6 +41,7 @@ storesRouter.post("/", requireAuth, requireRoles("supermarket", "admin"), asyncH
   if (!payload.name || !payload.category || !payload.slug) return res.status(400).json({ error: { code: "INVALID_STORE", message: "Store name and category are required" } });
   payload.ownerClerkUserId = auth.userId;
   payload.isApproved = await getUserRole(auth) === "admin";
+  payload.approvalStatus = payload.isApproved ? "approved" : "pending";
   const store = await Store.create(payload);
   res.status(201).json({ store });
 }));

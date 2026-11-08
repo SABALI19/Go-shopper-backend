@@ -12,15 +12,20 @@ export function configureClerk(app, config) {
 }
 
 export function requireAuth(req, res, next) {
-  const auth = getAuth(req);
-  if (!auth.userId) return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Sign in is required" } });
-  next();
+  void (async () => {
+    const auth = req.auth || getAuth(req);
+    if (!auth.userId) return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Sign in is required" } });
+    const { User } = await import("../models/User.js");
+    const account = await User.findOne({ clerkUserId: auth.userId }).select("isSuspended").lean();
+    if (account?.isSuspended) return res.status(403).json({ error: { code: "ACCOUNT_SUSPENDED", message: "This account is suspended. Contact Go-Shopper support." } });
+    return next();
+  })().catch(next);
 }
 
 export function roleFromClaims(claims) {
   const metadata = claims?.publicMetadata ?? claims?.public_metadata ?? claims?.metadata;
   const role = metadata?.role ?? claims?.role;
-  return ["customer", "supermarket", "admin"].includes(role) ? role : "customer";
+  return ["customer", "supermarket", "rider", "admin"].includes(role) ? role : "customer";
 }
 
 export async function getUserRole(auth) {
@@ -34,7 +39,10 @@ export function requireRoles(...roles) {
     const auth = req.auth || getAuth(req);
     if (!auth.userId) return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Sign in is required" } });
     try {
-      const role = await getUserRole(auth);
+      const { User } = await import("../models/User.js");
+      const savedUser = await User.findOne({ clerkUserId: auth.userId }).select("role isSuspended").lean();
+      if (savedUser?.isSuspended) return res.status(403).json({ error: { code: "ACCOUNT_SUSPENDED", message: "This account is suspended. Contact Go-Shopper support." } });
+      const role = savedUser?.role || roleFromClaims(auth.sessionClaims);
       if (roles.includes(role)) {
         return next();
       }
