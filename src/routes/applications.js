@@ -7,6 +7,7 @@ import { User } from "../models/User.js";
 import { Store } from "../models/Store.js";
 import { AdminAudit } from "../models/AdminAudit.js";
 import { OrderWorkflowError } from "../features/orders/service.js";
+import { sendApplicationConfirmation } from "../services/applicationEmail.js";
 
 const statuses = ["pending_review", "under_review", "needs_information", "approved", "rejected", "withdrawn"];
 export function createApplicationsRouter({ ApplicationModel = OnboardingApplication, UserModel = User, authenticate = requireAuth } = {}) {
@@ -36,7 +37,15 @@ export function createApplicationsRouter({ ApplicationModel = OnboardingApplicat
     if (current) throw new OrderWorkflowError(409, "RESUBMISSION_REQUIRED", "Update your existing application instead.");
     const reference = `GS-${type === "rider" ? "R" : "S"}-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
     const application = await ApplicationModel.create({ reference, type, applicantClerkUserId: auth.userId, data, status: "pending_review", history: [{ status: "pending_review", actorClerkUserId: auth.userId, message: "Application submitted" }] });
-    return res.status(201).json({ application: publicApplication(application) });
+    let confirmationEmailSent = false;
+    if (type === "supermarket") {
+      try {
+        confirmationEmailSent = await sendApplicationConfirmation(application);
+      } catch (error) {
+        console.error("Could not send supermarket application confirmation email:", error.message);
+      }
+    }
+    return res.status(201).json({ application: publicApplication(application), confirmationEmailSent });
   }));
   router.get("/mine", asyncHandler(async (req, res) => {
     const auth = req.auth || getAuth(req);
@@ -95,7 +104,7 @@ export function createAdminApplicationsRouter({ ApplicationModel = OnboardingApp
         const slug = `${slugify(application.data.businessName)}-${String(application._id).slice(-6)}`;
         let store = application.provisionedStoreId ? await StoreModel.findById(application.provisionedStoreId) : null;
         if (!store) store = await StoreModel.findOne({ slug });
-        if (!store) store = await StoreModel.create({ ownerClerkUserId: application.applicantClerkUserId, name: application.data.businessName, slug, category: application.data.category, description: application.data.description, categories: application.data.categories, address: { line1: application.data.address, city: application.data.city, state: application.data.state, country: "Nigeria" }, openHours: application.data.operatingHours, isActive: false, isApproved: true, approvalStatus: "approved" });
+        if (!store) store = await StoreModel.create({ ownerClerkUserId: application.applicantClerkUserId, name: application.data.businessName, slug, category: application.data.category, description: application.data.description, categories: application.data.categories, address: { line1: application.data.address, city: application.data.city, state: application.data.state, country: "Nigeria", ...(Number.isFinite(application.data.latitude) && Number.isFinite(application.data.longitude) ? { location: { type: "Point", coordinates: [application.data.longitude, application.data.latitude] } } : {}) }, openHours: application.data.operatingHours, isActive: false, isApproved: true, approvalStatus: "approved" });
         application.provisionedStoreId = store._id; user.role = "supermarket"; await user.save();
       } else {
         if (["admin", "supermarket"].includes(user.role)) throw new OrderWorkflowError(409, "ROLE_CANNOT_BE_CHANGED", "This account cannot be converted to a rider.");
@@ -121,7 +130,7 @@ export function createAdminApplicationsRouter({ ApplicationModel = OnboardingApp
 
 export function validateData(type, input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new OrderWorkflowError(400, "INVALID_APPLICATION", "Application details are required.");
-  const allowed = type === "supermarket" ? ["businessName", "legalName", "description", "category", "categories", "registrationNumber", "fullName", "email", "phone", "address", "city", "state", "operatingHours", "additionalInformation"] : ["fullName", "email", "phone", "address", "operatingArea", "vehicleType", "licenseInformation", "additionalInformation"];
+  const allowed = type === "supermarket" ? ["businessName", "legalName", "description", "category", "categories", "registrationNumber", "ownershipRole", "ownershipDeclaration", "fullName", "email", "phone", "address", "city", "state", "latitude", "longitude", "operatingHours", "additionalInformation"] : ["fullName", "email", "phone", "address", "operatingArea", "vehicleType", "licenseInformation", "additionalInformation"];
   if (Object.keys(input).some((key) => !allowed.includes(key))) throw new OrderWorkflowError(400, "INVALID_APPLICATION_FIELD", "Application contains unsupported fields.");
   const data = {};
   for (const field of allowed) if (input[field] !== undefined) {
@@ -130,15 +139,25 @@ export function validateData(type, input) {
       if (!Array.isArray(value) || value.length > 12 || value.some((item) => typeof item !== "string" || item.trim().length > 80)) throw new OrderWorkflowError(400, "INVALID_APPLICATION_FIELD", "categories must be a list of up to 12 values.");
       data[field] = value.map((item) => item.trim()).filter(Boolean); continue;
     }
+    if (field === "ownershipDeclaration") {
+      if (typeof value !== "boolean") throw new OrderWorkflowError(400, "INVALID_APPLICATION_FIELD", "ownershipDeclaration must be true or false.");
+      data[field] = value; continue;
+    }
+    if (field === "latitude" || field === "longitude") {
+      if (typeof value !== "number" || !Number.isFinite(value) || (field === "latitude" && (value < -90 || value > 90)) || (field === "longitude" && (value < -180 || value > 180))) throw new OrderWorkflowError(400, "INVALID_APPLICATION_FIELD", `${field} must be a valid map coordinate.`);
+      data[field] = value; continue;
+    }
     if (typeof value !== "string" || value.trim().length > fieldMax(field)) throw new OrderWorkflowError(400, "INVALID_APPLICATION_FIELD", `${field} must be text up to ${fieldMax(field)} characters.`);
     data[field] = value.trim();
   }
-  const required = type === "supermarket" ? ["businessName", "fullName", "email", "phone", "category", "address", "city", "state"] : ["fullName", "email", "phone", "address", "operatingArea", "vehicleType"];
+  const required = type === "supermarket" ? ["businessName", "legalName", "fullName", "email", "phone", "category", "description", "address", "city", "state", "operatingHours"] : ["fullName", "email", "phone", "address", "operatingArea", "vehicleType"];
   if (required.some((field) => !data[field])) throw new OrderWorkflowError(400, "APPLICATION_FIELDS_REQUIRED", `Required fields: ${required.join(", ")}.`);
+  if (type === "supermarket" && (!data.ownershipDeclaration || !["owner", "authorized_representative"].includes(data.ownershipRole))) throw new OrderWorkflowError(400, "OWNERSHIP_CONFIRMATION_REQUIRED", "Confirm ownership or authorization to represent this supermarket.");
+  if (type === "supermarket" && ((data.latitude === undefined) !== (data.longitude === undefined))) throw new OrderWorkflowError(400, "INVALID_STORE_LOCATION", "Both latitude and longitude are required when providing a map location.");
   if (!/^\S+@\S+\.\S+$/.test(data.email)) throw new OrderWorkflowError(400, "INVALID_EMAIL", "Enter a valid email address.");
   return data;
 }
-function fieldMax(field) { return ({ description: 3000, identityDetails: 500, licenseInformation: 200, additionalInformation: 1000, email: 254, address: 300, fullName: 120, businessName: 120, legalName: 120, operatingHours: 200, registrationNumber: 80, phone: 32, category: 80, city: 80, state: 80, operatingArea: 120, vehicleType: 80 })[field] || 500; }
+function fieldMax(field) { return ({ description: 3000, identityDetails: 500, licenseInformation: 200, additionalInformation: 1000, email: 254, address: 300, fullName: 120, businessName: 120, legalName: 120, operatingHours: 200, registrationNumber: 80, ownershipRole: 32, phone: 32, category: 80, city: 80, state: 80, operatingArea: 120, vehicleType: 80 })[field] || 500; }
 function publicApplication(a, admin = false) { const row = a.toObject ? a.toObject() : a; return { id: String(row._id), reference: row.reference, type: row.type, status: row.status, data: row.data, feedback: row.feedback || "", ...(admin ? { reviewerNotes: row.reviewerNotes || "" } : {}), history: (row.history || []).map(({ status, message, createdAt }) => ({ status, message, createdAt })), createdAt: row.createdAt, updatedAt: row.updatedAt, reviewedAt: row.reviewedAt }; }
 function validPage(v) { const n = v === undefined ? 1 : Number(v); if (!Number.isSafeInteger(n) || n < 1) throw new OrderWorkflowError(400, "INVALID_PAGINATION", "page must be positive."); return n; }
 function validLimit(v) { const n = v === undefined ? 25 : Number(v); if (!Number.isSafeInteger(n) || n < 1) throw new OrderWorkflowError(400, "INVALID_PAGINATION", "limit must be between 1 and 100."); return n; }
