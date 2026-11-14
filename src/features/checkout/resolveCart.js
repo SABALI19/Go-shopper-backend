@@ -22,7 +22,7 @@ export async function resolveCartItems({ items, StoreModel, ProductModel, sessio
   const requestedStoreIds = [...new Set(items.map((item) => item.storeId))];
   const storeFilters = requestedStoreIds.flatMap(storeLookup);
   const stores = await withSession(StoreModel.find({ $or: storeFilters }), session)
-    .select("_id slug name isActive isApproved ownerClerkUserId")
+    .select("_id slug name isActive isApproved ownerUserId")
     .lean();
   const storeByRequestedId = new Map();
   const issues = [];

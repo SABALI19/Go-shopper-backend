@@ -34,7 +34,7 @@ const refundObligationSchema = new mongoose.Schema({
 
 const parentOrderSchema = new mongoose.Schema({
   orderNumber: { type: String, required: true, unique: true, index: true },
-  customerClerkUserId: { type: String, required: true, index: true },
+  customerUserId: { type: String, required: true, index: true },
   idempotencyKey: { type: String, required: true },
   requestFingerprint: { type: String, required: true },
   subOrderIds: [{ type: mongoose.Schema.Types.ObjectId, ref: "SubOrder" }],
@@ -61,8 +61,8 @@ const parentOrderSchema = new mongoose.Schema({
   refundObligations: { type: [refundObligationSchema], default: [] },
 }, { timestamps: true, versionKey: false });
 
-parentOrderSchema.index({ customerClerkUserId: 1, createdAt: -1 });
-parentOrderSchema.index({ customerClerkUserId: 1, idempotencyKey: 1 }, { unique: true });
+parentOrderSchema.index({ customerUserId: 1, createdAt: -1 });
+parentOrderSchema.index({ customerUserId: 1, idempotencyKey: 1 }, { unique: true });
 parentOrderSchema.index({ reservationStatus: 1, reservationExpiresAt: 1, paymentStatus: 1 });
 
 export const ParentOrder = mongoose.model("ParentOrder", parentOrderSchema);

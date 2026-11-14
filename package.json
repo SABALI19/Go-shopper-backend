@@ -6,13 +6,14 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon --watch src --watch .env --ext js,json,env src/server.js",
-    "test": "node --test src/routes/checkout.test.js src/routes/orders.test.js src/routes/admin.test.js src/routes/deliveries.test.js src/routes/applications.test.js"
+    "admin:create": "node src/scripts/createAdmin.js",
+    "test": "node --test src/config/database.test.js src/features/orders/reservationWorker.test.js src/routes/auth.test.js src/services/applicationNotificationOutbox.test.js src/routes/checkout.test.js src/routes/orders.test.js src/routes/admin.test.js src/routes/deliveries.test.js src/routes/applications.test.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "@clerk/express": "^2.0.0",
+    "argon2": "^0.45.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^5.1.0",

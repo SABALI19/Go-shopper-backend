@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { getAuth } from "@clerk/express";
 import { Store } from "../models/Store.js";
 import { Product } from "../models/Product.js";
 import { asyncHandler } from "../middleware/asyncHandler.js";
@@ -17,9 +16,9 @@ storesRouter.get("/", asyncHandler(async (req, res) => {
   res.json({ stores });
 }));
 storesRouter.get("/mine", requireAuth, asyncHandler(async (req, res) => {
-  const auth = req.auth || getAuth(req);
+  const auth = req.auth;
   const role = await getUserRole(auth);
-  const filter = role === "admin" ? {} : { ownerClerkUserId: auth.userId };
+  const filter = role === "admin" ? {} : { ownerUserId: auth.userId };
   const stores = (await Store.find(filter).sort({ createdAt: -1 }).lean()).map((store) => ({
     id: store.slug,
     slug: store.slug,
@@ -35,11 +34,11 @@ storesRouter.get("/mine", requireAuth, asyncHandler(async (req, res) => {
 }));
 
 storesRouter.post("/", requireAuth, requireRoles("supermarket", "admin"), asyncHandler(async (req, res) => {
-  const auth = req.auth || getAuth(req);
+  const auth = req.auth;
   const payload = Object.fromEntries(editableStoreFields.filter((key) => key in (req.body || {})).map((key) => [key, req.body[key]]));
   payload.slug = String(req.body?.slug || payload.name || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   if (!payload.name || !payload.category || !payload.slug) return res.status(400).json({ error: { code: "INVALID_STORE", message: "Store name and category are required" } });
-  payload.ownerClerkUserId = auth.userId;
+  payload.ownerUserId = auth.userId;
   payload.isApproved = await getUserRole(auth) === "admin";
   payload.approvalStatus = payload.isApproved ? "approved" : "pending";
   const store = await Store.create(payload);
@@ -56,11 +55,11 @@ storesRouter.get("/:storeId", asyncHandler(async (req, res) => {
 }));
 
 storesRouter.patch("/:storeId", requireAuth, asyncHandler(async (req, res) => {
-  const auth = req.auth || getAuth(req);
+  const auth = req.auth;
   const role = await getUserRole(auth);
   const key = req.params.storeId;
   const storeKey = /^[a-f\d]{24}$/i.test(key) ? { _id: key } : { slug: key.toLowerCase() };
-  const filter = { ...storeKey, ...(role === "admin" ? {} : { ownerClerkUserId: auth.userId }) };
+  const filter = { ...storeKey, ...(role === "admin" ? {} : { ownerUserId: auth.userId }) };
   const update = Object.fromEntries(editableStoreFields.filter((key) => key in (req.body || {})).map((key) => [key, req.body[key]]));
   const store = await Store.findOneAndUpdate(filter, { $set: update }, { new: true, runValidators: true });
   if (!store) return res.status(404).json({ error: { code: "STORE_NOT_FOUND", message: "Store not found or you do not manage it" } });
@@ -79,11 +78,11 @@ storesRouter.get("/:storeId/products", asyncHandler(async (req, res) => {
 }));
 
 storesRouter.post("/:storeId/products", requireAuth, asyncHandler(async (req, res) => {
-  const auth = req.auth || getAuth(req);
+  const auth = req.auth;
   const role = await getUserRole(auth);
   const key = req.params.storeId;
   const storeKey = /^[a-f\d]{24}$/i.test(key) ? { _id: key } : { slug: key.toLowerCase() };
-  const store = await Store.findOne({ ...storeKey, ...(role === "admin" ? {} : { ownerClerkUserId: auth.userId }) }).select("_id").lean();
+  const store = await Store.findOne({ ...storeKey, ...(role === "admin" ? {} : { ownerUserId: auth.userId }) }).select("_id").lean();
   if (!store) return res.status(404).json({ error: { code: "STORE_NOT_FOUND", message: "Store not found or you do not manage it" } });
   const body = req.body || {};
   if (!body.productKey || !body.name || !Number.isSafeInteger(body.priceKobo) || !Number.isSafeInteger(body.stockQuantity)) {
@@ -94,11 +93,11 @@ storesRouter.post("/:storeId/products", requireAuth, asyncHandler(async (req, re
 }));
 
 storesRouter.patch("/:storeId/products/:productId", requireAuth, asyncHandler(async (req, res) => {
-  const auth = req.auth || getAuth(req);
+  const auth = req.auth;
   const role = await getUserRole(auth);
   const key = req.params.storeId;
   const storeKey = /^[a-f\d]{24}$/i.test(key) ? { _id: key } : { slug: key.toLowerCase() };
-  const store = await Store.findOne({ ...storeKey, ...(role === "admin" ? {} : { ownerClerkUserId: auth.userId }) }).select("_id").lean();
+  const store = await Store.findOne({ ...storeKey, ...(role === "admin" ? {} : { ownerUserId: auth.userId }) }).select("_id").lean();
   if (!store) return res.status(404).json({ error: { code: "STORE_NOT_FOUND", message: "Store not found or you do not manage it" } });
   const update = Object.fromEntries(editableProductFields.filter((key) => key in (req.body || {})).map((key) => [key, req.body[key]]));
   const productKey = req.params.productId;

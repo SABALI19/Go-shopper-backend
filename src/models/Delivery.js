@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 
 const deliveryEventSchema = new mongoose.Schema({
-  actorClerkUserId: { type: String, required: true },
+  actorUserId: { type: String, required: true },
   actorRole: { type: String, enum: ["admin", "rider", "supermarket", "system"], required: true },
   action: { type: String, required: true, trim: true, maxlength: 80 },
   fromStatus: { type: String, default: "" },
@@ -11,8 +11,8 @@ const deliveryEventSchema = new mongoose.Schema({
 }, { _id: false });
 
 const assignmentEventSchema = new mongoose.Schema({
-  actorClerkUserId: { type: String, required: true },
-  riderClerkUserId: { type: String, required: true },
+  actorUserId: { type: String, required: true },
+  riderUserId: { type: String, required: true },
   action: { type: String, enum: ["assigned", "reassigned"], required: true },
   reason: { type: String, trim: true, maxlength: 500, default: "" },
   createdAt: { type: Date, default: Date.now },
@@ -26,13 +26,13 @@ const deliverySchema = new mongoose.Schema({
   storeId: { type: mongoose.Schema.Types.ObjectId, ref: "Store", required: true, index: true },
   storeSlug: { type: String, required: true },
   storeName: { type: String, required: true },
-  customerClerkUserId: { type: String, required: true, index: true },
+  customerUserId: { type: String, required: true, index: true },
   destination: {
     fullName: { type: String, required: true, trim: true, maxlength: 120 },
     address: { type: String, required: true, trim: true, maxlength: 500 },
     phone: { type: String, required: true, trim: true, maxlength: 32 },
   },
-  assignedRiderClerkUserId: { type: String, default: null, index: true },
+  assignedRiderUserId: { type: String, default: null, index: true },
   status: {
     type: String,
     enum: ["awaiting_assignment", "assigned", "accepted", "arrived_at_pickup", "picked_up", "in_transit", "delivered", "failed"],
@@ -60,8 +60,8 @@ const deliverySchema = new mongoose.Schema({
   history: { type: [deliveryEventSchema], default: [] },
 }, { timestamps: true, versionKey: false });
 
-deliverySchema.index({ assignedRiderClerkUserId: 1, status: 1, updatedAt: -1 });
+deliverySchema.index({ assignedRiderUserId: 1, status: 1, updatedAt: -1 });
 deliverySchema.index({ storeId: 1, status: 1, updatedAt: -1 });
-deliverySchema.index({ customerClerkUserId: 1, createdAt: -1 });
+deliverySchema.index({ customerUserId: 1, createdAt: -1 });
 
 export const Delivery = mongoose.model("Delivery", deliverySchema);

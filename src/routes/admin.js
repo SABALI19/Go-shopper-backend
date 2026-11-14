@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { getAuth } from "@clerk/express";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, requireRoles } from "../middleware/auth.js";
 import { getCheckoutPricing } from "../config/checkoutPricing.js";
@@ -84,7 +83,7 @@ export function createAdminRouter({
     const parent = await ParentOrderModel.findOne(query).lean();
     if (!parent) return res.status(404).json({ error: { code: "ORDER_NOT_FOUND", message: "Order not found" } });
     const children = await SubOrderModel.find({ parentOrderId: parent._id }).sort({ createdAt: 1 }).lean();
-    const customer = await UserModel.findOne({ clerkUserId: parent.customerClerkUserId }).select("firstName lastName email phone role").lean();
+    const customer = await UserModel.findOne({ _id: parent.customerUserId }).select("firstName lastName email phone role").lean();
     return res.json({ order: { ...publicAdminOrder(parent, children), customer: customer ? safeUser(customer) : null } });
   }));
 
@@ -95,12 +94,12 @@ export function createAdminRouter({
   router.put("/settings", asyncHandler(async (req, res) => {
     const validation = validateSettings(req.body);
     if (validation.error) return res.status(400).json({ error: { code: "INVALID_SETTINGS", message: validation.error } });
-    const auth = req.auth || getAuth(req);
+    const auth = req.auth;
     const prior = await SettingsModel.findById("platform").lean();
     const settings = await SettingsModel.findOneAndUpdate({ _id: "platform" }, {
       $set: { ...validation.settings, updatedBy: auth.userId },
     }, { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true });
-    await AuditModel.create({ actorClerkUserId: auth.userId, action: "platform_settings_updated", targetType: "platform_settings", targetId: "platform", metadata: { before: prior ? pickSettings(prior) : null, after: validation.settings } });
+    await AuditModel.create({ actorUserId: auth.userId, action: "platform_settings_updated", targetType: "platform_settings", targetId: "platform", metadata: { before: prior ? pickSettings(prior) : null, after: validation.settings } });
     return res.json({ settings: publicSettings(settings) });
   }));
 

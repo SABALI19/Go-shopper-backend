@@ -1,6 +1,5 @@
 import { Router } from "express";
 import { createHash, randomInt } from "node:crypto";
-import { getAuth } from "@clerk/express";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, requireRoles } from "../middleware/auth.js";
 import { ParentOrder } from "../models/ParentOrder.js";
@@ -36,9 +35,9 @@ export function createOrdersRouter({
   router.post("/", asyncHandler(async (req, res) => {
     const input = validateCreateOrderRequest(req.body, req.get("Idempotency-Key"));
     if (input.error) return res.status(400).json({ error: { code: "INVALID_ORDER_REQUEST", message: input.error } });
-    const auth = req.auth || getAuth(req);
+    const auth = req.auth;
     const result = await createParentOrder({
-      customerClerkUserId: auth.userId,
+      customerUserId: auth.userId,
       input,
       ParentOrderModel,
       SubOrderModel,
@@ -52,18 +51,18 @@ export function createOrdersRouter({
 
   router.get("/", asyncHandler(async (req, res) => {
     const { page, limit } = parsePagination(req.query);
-    const auth = req.auth || getAuth(req);
+    const auth = req.auth;
     const [orders, total] = await Promise.all([
-      ParentOrderModel.find({ customerClerkUserId: auth.userId }).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
-      ParentOrderModel.countDocuments({ customerClerkUserId: auth.userId }),
+      ParentOrderModel.find({ customerUserId: auth.userId }).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      ParentOrderModel.countDocuments({ customerUserId: auth.userId }),
     ]);
     const childOrders = orders.length
       ? await SubOrderModel.find({ parentOrderId: { $in: orders.map((order) => order._id) } }).sort({ createdAt: 1 }).lean()
       : [];
     const deliveries = childOrders.length ? await DeliveryModel.find({ subOrderId: { $in: childOrders.map((child) => child._id) } }).lean() : [];
-    const riders = deliveries.length ? await UserModel.find({ clerkUserId: { $in: deliveries.map((d) => d.assignedRiderClerkUserId).filter(Boolean) } }).select("clerkUserId firstName lastName phone").lean() : [];
+    const riders = deliveries.length ? await UserModel.find({ _id: { $in: deliveries.map((d) => d.assignedRiderUserId).filter(Boolean) } }).select("_id firstName lastName phone").lean() : [];
     const deliveryBySubOrder = new Map(deliveries.map((d) => [String(d.subOrderId), d]));
-    const riderById = new Map(riders.map((rider) => [rider.clerkUserId, rider]));
+    const riderById = new Map(riders.map((rider) => [rider._id, rider]));
     const result = orders.map((order) => ({
       ...publicOrderSummary(order),
       subOrders: childOrders.filter((child) => String(child.parentOrderId) === String(order._id)).map((child) => ({ ...publicOrderSummary(child), delivery: publicCustomerDelivery(deliveryBySubOrder.get(String(child._id)), riderById) })),
@@ -73,43 +72,43 @@ export function createOrdersRouter({
 
   router.get("/:orderId", asyncHandler(async (req, res) => {
     if (!validOrderId(req.params.orderId)) return res.status(404).json({ error: { code: "ORDER_NOT_FOUND", message: "Order not found" } });
-    const auth = req.auth || getAuth(req);
+    const auth = req.auth;
     const query = /^[a-f\d]{24}$/i.test(req.params.orderId) ? { _id: req.params.orderId } : { orderNumber: req.params.orderId };
-    const parent = await ParentOrderModel.findOne({ ...query, customerClerkUserId: auth.userId }).lean();
+    const parent = await ParentOrderModel.findOne({ ...query, customerUserId: auth.userId }).lean();
     if (!parent) return res.status(404).json({ error: { code: "ORDER_NOT_FOUND", message: "Order not found" } });
     const children = await SubOrderModel.find({ parentOrderId: parent._id }).sort({ createdAt: 1 }).lean();
     const deliveries = children.length ? await DeliveryModel.find({ subOrderId: { $in: children.map((child) => child._id) } }).lean() : [];
-    const riders = deliveries.length ? await UserModel.find({ clerkUserId: { $in: deliveries.map((d) => d.assignedRiderClerkUserId).filter(Boolean) } }).select("clerkUserId firstName lastName phone").lean() : [];
+    const riders = deliveries.length ? await UserModel.find({ _id: { $in: deliveries.map((d) => d.assignedRiderUserId).filter(Boolean) } }).select("_id firstName lastName phone").lean() : [];
     const deliveryBySubOrder = new Map(deliveries.map((d) => [String(d.subOrderId), d]));
-    const riderById = new Map(riders.map((rider) => [rider.clerkUserId, rider]));
+    const riderById = new Map(riders.map((rider) => [rider._id, rider]));
     const order = { ...publicOrderSummary(parent), subOrders: children.map((child) => ({ ...publicOrderSummary(child), delivery: publicCustomerDelivery(deliveryBySubOrder.get(String(child._id)), riderById) })) };
     return res.json({ order });
   }));
 
   router.post("/:orderId/deliveries/:deliveryId/code", asyncHandler(async (req, res) => {
     if (!validOrderId(req.params.orderId) || Object.keys(req.body || {}).length) throw new OrderWorkflowError(400, "INVALID_DELIVERY_CODE_REQUEST", "No request fields are accepted.");
-    const auth = req.auth || getAuth(req);
+    const auth = req.auth;
     const orderQuery = /^[a-f\d]{24}$/i.test(req.params.orderId) ? { _id: req.params.orderId } : { orderNumber: req.params.orderId };
-    const parent = await ParentOrderModel.findOne({ ...orderQuery, customerClerkUserId: auth.userId }).select("_id paymentStatus").lean();
+    const parent = await ParentOrderModel.findOne({ ...orderQuery, customerUserId: auth.userId }).select("_id paymentStatus").lean();
     if (!parent) return res.status(404).json({ error: { code: "ORDER_NOT_FOUND", message: "Order not found." } });
-    const delivery = await DeliveryModel.findOne({ _id: req.params.deliveryId, parentOrderId: parent._id, customerClerkUserId: auth.userId }).lean();
+    const delivery = await DeliveryModel.findOne({ _id: req.params.deliveryId, parentOrderId: parent._id, customerUserId: auth.userId }).lean();
     if (!delivery) return res.status(404).json({ error: { code: "DELIVERY_NOT_FOUND", message: "Delivery not found." } });
     if (parent.paymentStatus !== "paid" || delivery.status !== "in_transit") throw new OrderWorkflowError(409, "DELIVERY_CODE_NOT_AVAILABLE", "A delivery code is available only while your order is out for delivery.");
     const now = new Date();
     const recentCount = delivery.proofOfDelivery?.codeIssuedAt && now.getTime() - new Date(delivery.proofOfDelivery.codeIssuedAt).getTime() < CODE_ISSUE_WINDOW_MS ? delivery.proofOfDelivery.codeIssueCount || 0 : 0;
     if (recentCount >= MAX_CODE_ISSUES) throw new OrderWorkflowError(429, "DELIVERY_CODE_RATE_LIMIT", "Too many code requests. Try again later.");
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
-    const updated = await DeliveryModel.findOneAndUpdate({ _id: delivery._id, customerClerkUserId: auth.userId, status: "in_transit" }, { $set: { "proofOfDelivery.codeHash": createHash("sha256").update(code).digest("hex"), "proofOfDelivery.codeExpiresAt": new Date(now.getTime() + CODE_LIFETIME_MS), "proofOfDelivery.codeAttempts": 0, "proofOfDelivery.codeIssuedAt": now, "proofOfDelivery.codeIssueCount": recentCount + 1 } }, { new: true });
+    const updated = await DeliveryModel.findOneAndUpdate({ _id: delivery._id, customerUserId: auth.userId, status: "in_transit" }, { $set: { "proofOfDelivery.codeHash": createHash("sha256").update(code).digest("hex"), "proofOfDelivery.codeExpiresAt": new Date(now.getTime() + CODE_LIFETIME_MS), "proofOfDelivery.codeAttempts": 0, "proofOfDelivery.codeIssuedAt": now, "proofOfDelivery.codeIssueCount": recentCount + 1 } }, { new: true });
     if (!updated) throw new OrderWorkflowError(409, "DELIVERY_CHANGED", "Delivery status changed. Refresh and try again.");
     return res.json({ code, expiresAt: updated.proofOfDelivery.codeExpiresAt });
   }));
 
   router.get("/:orderId/customer-action", asyncHandler(async (req, res) => {
     if (!validOrderId(req.params.orderId)) return res.status(404).json({ error: { code: "ORDER_NOT_FOUND", message: "Order not found" } });
-    const auth = req.auth || getAuth(req);
+    const auth = req.auth;
     const action = await getCustomerActionRequest({
       orderId: req.params.orderId,
-      customerClerkUserId: auth.userId,
+      customerUserId: auth.userId,
       ParentOrderModel,
       SubOrderModel,
     });
@@ -122,10 +121,10 @@ export function createOrdersRouter({
     if (!req.body || Object.keys(req.body).some((key) => key !== "decision")) {
       return res.status(400).json({ error: { code: "INVALID_CUSTOMER_DECISION", message: "Only decision may be supplied" } });
     }
-    const auth = req.auth || getAuth(req);
+    const auth = req.auth;
     const order = await decideCustomerAction({
       orderId: req.params.orderId,
-      customerClerkUserId: auth.userId,
+      customerUserId: auth.userId,
       decision: req.body.decision,
       ParentOrderModel,
       SubOrderModel,
@@ -138,10 +137,10 @@ export function createOrdersRouter({
 
   router.post("/:orderId/cancel", asyncHandler(async (req, res) => {
     if (!validOrderId(req.params.orderId)) return res.status(404).json({ error: { code: "ORDER_NOT_FOUND", message: "Order not found" } });
-    const auth = req.auth || getAuth(req);
+    const auth = req.auth;
     const order = await cancelPendingOrder({
       orderId: req.params.orderId,
-      customerClerkUserId: auth.userId,
+      customerUserId: auth.userId,
       ParentOrderModel,
       SubOrderModel,
       ProductModel,
@@ -222,7 +221,7 @@ function publicOrderSummary(order) {
 
 function publicCustomerDelivery(delivery, riderById) {
   if (!delivery) return null;
-  const rider = delivery.assignedRiderClerkUserId ? riderById.get(delivery.assignedRiderClerkUserId) : null;
+  const rider = delivery.assignedRiderUserId ? riderById.get(delivery.assignedRiderUserId) : null;
   return {
     id: String(delivery._id), status: delivery.status, storeName: delivery.storeName,
     assignedAt: delivery.assignedAt, acceptedAt: delivery.acceptedAt, arrivedAt: delivery.arrivedAt,

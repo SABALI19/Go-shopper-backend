@@ -196,19 +196,19 @@ function checkDuplicateProducts(items) {
 }
 
 async function findExistingOrder(ParentOrderModel, customerId, key) {
-  return ParentOrderModel.findOne({ customerClerkUserId: customerId, idempotencyKey: key }).lean();
+  return ParentOrderModel.findOne({ customerUserId: customerId, idempotencyKey: key }).lean();
 }
 
-export async function loadParentOrder({ ParentOrderModel, SubOrderModel, orderId, customerClerkUserId }) {
+export async function loadParentOrder({ ParentOrderModel, SubOrderModel, orderId, customerUserId }) {
   const query = /^[a-f\d]{24}$/i.test(orderId) ? { _id: orderId } : { orderNumber: orderId };
-  const order = await ParentOrderModel.findOne({ ...query, customerClerkUserId }).lean();
+  const order = await ParentOrderModel.findOne({ ...query, customerUserId }).lean();
   if (!order) return null;
   const subOrders = await SubOrderModel.find({ parentOrderId: order._id }).sort({ createdAt: 1 }).lean();
   return publicParentOrder(order, subOrders);
 }
 
 export async function createParentOrder({
-  customerClerkUserId,
+  customerUserId,
   input,
   pricing = getCheckoutPricing(),
   ParentOrderModel = ParentOrder,
@@ -220,12 +220,12 @@ export async function createParentOrder({
   reservationTtlMinutes = 15,
 }) {
   const fingerprint = fingerprintOrderRequest(input.items, input.delivery);
-  const existing = await findExistingOrder(ParentOrderModel, customerClerkUserId, input.idempotencyKey);
+  const existing = await findExistingOrder(ParentOrderModel, customerUserId, input.idempotencyKey);
   if (existing) {
     if (existing.requestFingerprint !== fingerprint) {
       throw new OrderWorkflowError(409, "IDEMPOTENCY_KEY_REUSED", "This idempotency key was already used for a different order request.");
     }
-    const result = await loadParentOrder({ ParentOrderModel, SubOrderModel, orderId: String(existing._id), customerClerkUserId });
+    const result = await loadParentOrder({ ParentOrderModel, SubOrderModel, orderId: String(existing._id), customerUserId });
     return { order: result, reused: true };
   }
 
@@ -234,7 +234,7 @@ export async function createParentOrder({
   let reused = false;
   try {
     await session.withTransaction(async () => {
-      const inTransaction = await ParentOrderModel.findOne({ customerClerkUserId, idempotencyKey: input.idempotencyKey }).session(session).lean();
+      const inTransaction = await ParentOrderModel.findOne({ customerUserId, idempotencyKey: input.idempotencyKey }).session(session).lean();
       if (inTransaction) {
         if (inTransaction.requestFingerprint !== fingerprint) {
           throw new OrderWorkflowError(409, "IDEMPOTENCY_KEY_REUSED", "This idempotency key was already used for a different order request.");
@@ -277,7 +277,7 @@ export async function createParentOrder({
       const orderNumber = `GS-${randomUUID().slice(0, 8).toUpperCase()}`;
       const parent = (await ParentOrderModel.create([{
         orderNumber,
-        customerClerkUserId,
+        customerUserId,
         idempotencyKey: input.idempotencyKey,
         requestFingerprint: fingerprint,
         subOrderIds: [],
@@ -301,7 +301,7 @@ export async function createParentOrder({
           subOrderNumber: `${orderNumber}-${String(index + 1).padStart(2, "0")}`,
           parentOrderId: parent._id,
           parentOrderNumber: orderNumber,
-          customerClerkUserId,
+          customerUserId,
           storeId: storeItems[0].storeObjectId,
           storeSlug: store.storeId,
           storeName: store.storeName,
@@ -333,7 +333,7 @@ export async function createParentOrder({
     });
   } catch (error) {
     if (error.code === 11000) {
-      const concurrentExisting = await findExistingOrder(ParentOrderModel, customerClerkUserId, input.idempotencyKey);
+      const concurrentExisting = await findExistingOrder(ParentOrderModel, customerUserId, input.idempotencyKey);
       if (concurrentExisting) {
         if (concurrentExisting.requestFingerprint !== fingerprint) {
           throw new OrderWorkflowError(409, "IDEMPOTENCY_KEY_REUSED", "This idempotency key was already used for a different order request.");
@@ -352,7 +352,7 @@ export async function createParentOrder({
     await session.endSession();
   }
 
-  const order = await loadParentOrder({ ParentOrderModel, SubOrderModel, orderId: String(orderId), customerClerkUserId });
+  const order = await loadParentOrder({ ParentOrderModel, SubOrderModel, orderId: String(orderId), customerUserId });
   return { order, reused };
 }
 
@@ -384,7 +384,7 @@ export async function releaseOrderReservation({ parent, subOrders, session, Prod
 
 export async function cancelPendingOrder({
   orderId,
-  customerClerkUserId,
+  customerUserId,
   ParentOrderModel = ParentOrder,
   SubOrderModel = SubOrder,
   ProductModel = Product,
@@ -395,7 +395,7 @@ export async function cancelPendingOrder({
   let found = false;
   try {
     await session.withTransaction(async () => {
-      const parent = await withSession(ParentOrderModel.findOne({ ...idQuery, customerClerkUserId }), session).lean();
+      const parent = await withSession(ParentOrderModel.findOne({ ...idQuery, customerUserId }), session).lean();
       if (!parent) return;
       found = true;
       if (parent.status === "cancelled") return;
@@ -418,7 +418,7 @@ export async function cancelPendingOrder({
     await session.endSession();
   }
   if (!found) return null;
-  return loadParentOrder({ ParentOrderModel, SubOrderModel, orderId, customerClerkUserId });
+  return loadParentOrder({ ParentOrderModel, SubOrderModel, orderId, customerUserId });
 }
 
 export async function expirePendingOrderReservations({
@@ -428,7 +428,7 @@ export async function expirePendingOrderReservations({
   connection = mongoose.connection,
   now = new Date(),
   limit = 100,
-}) {
+} = {}) {
   const candidates = await ParentOrderModel.find({
     status: "pending_payment",
     paymentStatus: "pending",

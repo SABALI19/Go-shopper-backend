@@ -5,22 +5,30 @@ import { getCheckoutPricing } from "./checkoutPricing.js";
 dotenv.config();
 
 export function getConfig() {
-  // Clerk middleware requires both the server secret and matching app publishable key.
-  const required = ["MONGODB_URI", "CLERK_SECRET_KEY", "CLERK_PUBLISHABLE_KEY"];
+  const required = ["MONGODB_URI", "AUTH_ACCESS_TOKEN_SECRET"];
   const missing = required.filter((key) => !process.env[key]);
   if (missing.length) {
     throw new Error(`Missing required backend environment variables: ${missing.join(", ")}. Copy .env.example to .env and fill them in.`);
+  }
+  if (process.env.AUTH_ACCESS_TOKEN_SECRET.length < 32) throw new Error("AUTH_ACCESS_TOKEN_SECRET must contain at least 32 characters.");
+
+  const nodeEnv = process.env.NODE_ENV || "development";
+  const webAppUrl = (process.env.WEB_APP_URL || "").trim().replace(/\/$/, "");
+  if (nodeEnv === "production") {
+    let parsedWebUrl;
+    try { parsedWebUrl = new URL(webAppUrl); } catch { throw new Error("WEB_APP_URL must be set to the deployed onboarding website URL."); }
+    if (parsedWebUrl.protocol !== "https:") throw new Error("WEB_APP_URL must use HTTPS in production.");
+    if (!process.env.CORS_ORIGINS) throw new Error("CORS_ORIGINS must include the deployed website origin in production.");
   }
 
   return {
     port: Number(process.env.PORT || 4000),
     mongoUri: process.env.MONGODB_URI,
-    clerkSecretKey: process.env.CLERK_SECRET_KEY,
-    clerkPublishableKey: process.env.CLERK_PUBLISHABLE_KEY,
-    adminEmail: (process.env.ADMIN_EMAIL || "").trim().toLowerCase(),
+    authAccessTokenSecret: process.env.AUTH_ACCESS_TOKEN_SECRET,
+    nodeEnv,
+    webAppUrl,
     corsOrigins: (process.env.CORS_ORIGINS || "http://localhost:8081,http://localhost:19006")
       .split(",").map((origin) => origin.trim()).filter(Boolean),
-    nodeEnv: process.env.NODE_ENV || "development",
     checkoutPricing: getCheckoutPricing(process.env),
     orderReservationTtlMinutes: positiveInteger(process.env.ORDER_RESERVATION_TTL_MINUTES, 15, "ORDER_RESERVATION_TTL_MINUTES"),
     orderReservationSweepSeconds: positiveInteger(process.env.ORDER_RESERVATION_SWEEP_SECONDS, 60, "ORDER_RESERVATION_SWEEP_SECONDS"),

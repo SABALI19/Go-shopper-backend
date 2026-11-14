@@ -37,7 +37,7 @@ const subOrderSchema = new mongoose.Schema({
   subOrderNumber: { type: String, required: true, unique: true, index: true },
   parentOrderId: { type: mongoose.Schema.Types.ObjectId, ref: "ParentOrder", required: true, index: true },
   parentOrderNumber: { type: String, required: true },
-  customerClerkUserId: { type: String, required: true, index: true },
+  customerUserId: { type: String, required: true, index: true },
   storeId: { type: mongoose.Schema.Types.ObjectId, ref: "Store", required: true, index: true },
   storeSlug: { type: String, required: true },
   storeName: { type: String, required: true },
@@ -60,7 +60,7 @@ const subOrderSchema = new mongoose.Schema({
 }, { timestamps: true, versionKey: false });
 
 subOrderSchema.index({ storeId: 1, status: 1, createdAt: -1 });
-subOrderSchema.index({ customerClerkUserId: 1, createdAt: -1 });
+subOrderSchema.index({ customerUserId: 1, createdAt: -1 });
 subOrderSchema.index({ parentOrderId: 1, storeId: 1 });
 
 export const SubOrder = mongoose.model("SubOrder", subOrderSchema);

@@ -24,10 +24,10 @@ test("delivery lifecycle permits only explicit next steps", () => {
 
 test("rider API is role protected and scopes delivery reads to the authenticated rider", async () => {
   let observedFilter;
-  const DeliveryModel = { find(filter) { observedFilter = filter; return query([{ _id: "delivery-1", assignedRiderClerkUserId: "rider-1", parentOrderNumber: "GS-1", subOrderNumber: "GS-1-1", storeSlug: "store", storeName: "Store", status: "assigned", destination: { fullName: "Customer", address: "Address", phone: "08000000000" } }]); }, countDocuments() { return 1; } };
+  const DeliveryModel = { find(filter) { observedFilter = filter; return query([{ _id: "delivery-1", assignedRiderUserId: "rider-1", parentOrderNumber: "GS-1", subOrderNumber: "GS-1-1", storeSlug: "store", storeName: "Store", status: "assigned", destination: { fullName: "Customer", address: "Address", phone: "08000000000" } }]); }, countDocuments() { return 1; } };
   const app = express(); app.use("/api/rider", createRiderRouter({ DeliveryModel, authenticate: auth("rider"), authorizeRider: roles("rider") })); app.use(errorHandler);
   const allowed = await request(app, "/api/rider/deliveries", "rider-1");
-  assert.equal(allowed.status, 200); assert.equal(observedFilter.assignedRiderClerkUserId, "rider-1");
+  assert.equal(allowed.status, 200); assert.equal(observedFilter.assignedRiderUserId, "rider-1");
   assert.equal(allowed.body.deliveries[0].destination.fullName, "Customer");
 
   const customerApp = express(); customerApp.use("/api/rider", createRiderRouter({ DeliveryModel, authenticate: auth("customer"), authorizeRider: roles("rider") })); customerApp.use(errorHandler);
@@ -55,11 +55,11 @@ test("public rider delivery serializer omits customer verification codes", () =>
 
 test("customer delivery code is owner-scoped and only the hash is persisted", async () => {
   const parent = { _id: "parent-db", paymentStatus: "paid" };
-  const delivery = { _id: "0123456789abcdef01234567", parentOrderId: parent._id, customerClerkUserId: "customer-1", status: "in_transit", proofOfDelivery: { codeIssueCount: 0 } };
+  const delivery = { _id: "0123456789abcdef01234567", parentOrderId: parent._id, customerUserId: "customer-1", status: "in_transit", proofOfDelivery: { codeIssueCount: 0 } };
   let persisted;
-  const ParentOrderModel = { findOne: (filter) => query(filter.customerClerkUserId === "customer-1" ? parent : null) };
+  const ParentOrderModel = { findOne: (filter) => query(filter.customerUserId === "customer-1" ? parent : null) };
   const DeliveryModel = {
-    findOne: (filter) => query(filter.customerClerkUserId === "customer-1" && filter.parentOrderId === parent._id ? delivery : null),
+    findOne: (filter) => query(filter.customerUserId === "customer-1" && filter.parentOrderId === parent._id ? delivery : null),
     async findOneAndUpdate(filter, update) { persisted = update.$set; return { ...delivery, proofOfDelivery: { codeExpiresAt: persisted["proofOfDelivery.codeExpiresAt"] } }; },
   };
   const app = express(); app.use(express.json()); app.use("/api/orders", createOrdersRouter({ ParentOrderModel, DeliveryModel, authenticate: auth("customer"), authorizeCustomer: roles("customer") })); app.use(errorHandler);
@@ -109,10 +109,10 @@ test("admin assignment requires an available approved rider and records assignme
 
 function makeAssignmentWorld(isOnline) {
   const state = {
-    delivery: { _id: "0123456789abcdef01234567", parentOrderId: "parent-db", parentOrderNumber: "GS-1", subOrderId: "sub-db", subOrderNumber: "SUB-1", storeId: "store-db", storeSlug: "alpha", storeName: "Alpha Store", customerClerkUserId: "customer-1", status: "awaiting_assignment", assignmentHistory: [], history: [] },
+    delivery: { _id: "0123456789abcdef01234567", parentOrderId: "parent-db", parentOrderNumber: "GS-1", subOrderId: "sub-db", subOrderNumber: "SUB-1", storeId: "store-db", storeSlug: "alpha", storeName: "Alpha Store", customerUserId: "customer-1", status: "awaiting_assignment", assignmentHistory: [], history: [] },
     parent: { _id: "parent-db", paymentStatus: "paid" }, child: { _id: "sub-db", storeId: "store-db", status: "ready_for_dispatch" },
     store: { _id: "store-db", isActive: true, isApproved: true, approvalStatus: "approved" },
-    rider: { _id: "abcdefabcdefabcdefabcdef", clerkUserId: "rider-1", role: "rider", firstName: "Rider", lastName: "One", phone: "08000000000", isSuspended: false, riderProfile: { approvalStatus: "approved", isOnline, activeDeliveryId: null, vehicleType: "bike" } },
+    rider: { _id: "abcdefabcdefabcdefabcdef", role: "rider", firstName: "Rider", lastName: "One", phone: "08000000000", isSuspended: false, riderProfile: { approvalStatus: "approved", isOnline, activeDeliveryId: null, vehicleType: "bike" } },
   };
   const connection = { async startSession() { return { async withTransaction(callback) { return callback(); }, async endSession() {} }; } };
   const DeliveryModel = {
@@ -120,7 +120,8 @@ function makeAssignmentWorld(isOnline) {
     findOneAndUpdate: (_filter, update) => ({ lean: () => { Object.assign(state.delivery, update.$set); state.delivery.assignmentHistory.push(update.$push.assignmentHistory); state.delivery.history.push(update.$push.history); return Promise.resolve(state.delivery); } }),
   };
   const UserModel = {
-    findOne: (filter) => query(filter.clerkUserId ? state.rider : state.rider),
+    findOne: () => query(state.rider),
+    findById: (id) => query(String(id) === state.rider._id ? state.rider : null),
     updateOne: (filter, update) => { if (filter._id && !state.rider.riderProfile.isOnline) return Promise.resolve({ modifiedCount: 0 }); Object.assign(state.rider.riderProfile, { activeDeliveryId: update.$set["riderProfile.activeDeliveryId"], isOnline: update.$set["riderProfile.isOnline"] }); return Promise.resolve({ modifiedCount: 1 }); },
   };
   const ParentOrderModel = { findOne: () => ({ session() { return this; }, lean: () => Promise.resolve(state.parent) }) };
@@ -133,10 +134,10 @@ function makeAssignmentWorld(isOnline) {
 
 function makeHandoverWorld(deliveryStatus, owner) {
   const state = {
-    store: { _id: "store-db", slug: "alpha", name: "Alpha Store", ownerClerkUserId: owner, isActive: true, isApproved: true, approvalStatus: "approved" },
-    parent: { _id: "parent-db", orderNumber: "GS-1", customerClerkUserId: "customer-1", paymentStatus: "paid", status: "processing", delivery: { fullName: "Customer", address: "Address", phone: "08000000000" } },
+    store: { _id: "store-db", slug: "alpha", name: "Alpha Store", ownerUserId: owner, isActive: true, isApproved: true, approvalStatus: "approved" },
+    parent: { _id: "parent-db", orderNumber: "GS-1", customerUserId: "customer-1", paymentStatus: "paid", status: "processing", delivery: { fullName: "Customer", address: "Address", phone: "08000000000" } },
     subOrder: { _id: "sub-db", subOrderNumber: "SUB-1", parentOrderId: "parent-db", storeId: "store-db", storeSlug: "alpha", storeName: "Alpha Store", status: "ready_for_dispatch", items: [{ productKey: "rice", productName: "Rice", quantity: 1, lineTotalKobo: 900000, fulfilmentStatus: "fulfilled" }] },
-    delivery: { _id: "0123456789abcdef01234567", subOrderId: "sub-db", parentOrderId: "parent-db", storeId: "store-db", assignedRiderClerkUserId: "rider-1", status: deliveryStatus, history: [] },
+    delivery: { _id: "0123456789abcdef01234567", subOrderId: "sub-db", parentOrderId: "parent-db", storeId: "store-db", assignedRiderUserId: "rider-1", status: deliveryStatus, history: [] },
   };
   const connection = { async startSession() { return { async withTransaction(callback) { return callback(); }, async endSession() {} }; } };
   const StoreModel = { find: () => query([state.store]) };

@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 
 const storeSchema = new mongoose.Schema({
-  ownerClerkUserId: { type: String, required: true, index: true },
+  ownerUserId: { type: String, required: true, index: true },
   name: { type: String, required: true, trim: true, maxlength: 120 },
   slug: { type: String, required: true, trim: true, lowercase: true, unique: true, index: true },
   category: { type: String, required: true, trim: true, maxlength: 80 },

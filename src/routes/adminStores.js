@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { getAuth } from "@clerk/express";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, requireRoles } from "../middleware/auth.js";
 import { AdminAudit } from "../models/AdminAudit.js";
@@ -25,22 +24,13 @@ export function createAdminStoresRouter({ StoreModel = Store, ProductModel = Pro
     if (!/^\S+@\S+\.\S+$/.test(ownerEmail) || ownerEmail.length > 254 || !name || name.length > 120 || !category || category.length > 80 || description.length > 3000 || openHours.length > 200 || !Array.isArray(categories) || categories.length > 12 || categories.some((entry) => typeof entry !== "string" || entry.trim().length > 80) || !address || typeof address !== "object" || Array.isArray(address) || Object.keys(address).some((key) => !["line1", "city", "state", "country"].includes(key)) || [address.line1, address.city, address.state, address.country].some((entry) => entry !== undefined && (typeof entry !== "string" || entry.length > 300))) throw new OrderWorkflowError(400, "INVALID_STORE_PROVISION", "Provide a registered owner's email, store name, category and valid store details.");
     const owner = await UserModel.findOne({ email: ownerEmail });
     if (!owner) throw new OrderWorkflowError(404, "STORE_OWNER_NOT_FOUND", "The owner must have a registered Go-Shopper account.");
-    const ownerClerkUserId = owner.clerkUserId;
+    const ownerUserId = String(owner._id);
     if (owner.isSuspended) throw new OrderWorkflowError(409, "SUSPENDED_ACCOUNT", "A suspended user cannot own a store.");
-    if (["admin", "rider"].includes(owner.role)) throw new OrderWorkflowError(409, "ROLE_CANNOT_BE_CHANGED", "This account cannot be converted to a supermarket owner.");
-    const clerk = req.app.locals.clerkClient;
-    let clerkUser;
-    if (owner.role !== "supermarket") {
-      if (!clerk?.users?.getUser || !clerk?.users?.updateUserMetadata) throw new OrderWorkflowError(503, "CLERK_UNAVAILABLE", "Store owner provisioning is temporarily unavailable.");
-      clerkUser = await clerk.users.getUser(ownerClerkUserId);
-      await clerk.users.updateUserMetadata(ownerClerkUserId, { publicMetadata: { ...clerkUser.publicMetadata, role: "supermarket" } });
-      owner.role = "supermarket";
-      await owner.save();
-    }
+    if (owner.role !== "supermarket" || owner.approvalStatus !== "approved" || !owner.emailVerified || !owner.phoneVerified) throw new OrderWorkflowError(409, "STORE_OWNER_NOT_APPROVED", "The owner must have a verified, admin-approved supermarket account.");
     const slug = `${slugify(name)}-${Date.now().toString(36)}`;
-    const store = await StoreModel.create({ ownerClerkUserId, name, slug, category, description, categories: categories.map((entry) => entry.trim()).filter(Boolean), address: { line1: address.line1?.trim() || "", city: address.city?.trim() || "", state: address.state?.trim() || "", country: address.country?.trim() || "Nigeria" }, openHours, isActive: false, isApproved: true, approvalStatus: "approved" });
-    const auth = req.auth || getAuth(req);
-    await AuditModel.create({ actorClerkUserId: auth.userId, action: "store_created_for_owner", targetType: "store", targetId: store.slug, metadata: { ownerClerkUserId, isActive: false } });
+    const store = await StoreModel.create({ ownerUserId, name, slug, category, description, categories: categories.map((entry) => entry.trim()).filter(Boolean), address: { line1: address.line1?.trim() || "", city: address.city?.trim() || "", state: address.state?.trim() || "", country: address.country?.trim() || "Nigeria" }, openHours, isActive: false, isApproved: true, approvalStatus: "approved" });
+    const auth = req.auth;
+    await AuditModel.create({ actorUserId: auth.userId, action: "store_created_for_owner", targetType: "store", targetId: store.slug, metadata: { ownerUserId, isActive: false } });
     return res.status(201).json({ store: safeStore(store.toObject ? store.toObject() : store) });
   }));
 
@@ -61,11 +51,24 @@ export function createAdminStoresRouter({ StoreModel = Store, ProductModel = Pro
       StoreModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
       StoreModel.countDocuments(filter),
     ]);
-    const ownerIds = [...new Set(rows.map((store) => store.ownerClerkUserId))];
-    const owners = ownerIds.length ? await UserModel.find({ clerkUserId: { $in: ownerIds } }).select("clerkUserId firstName lastName email phone").lean() : [];
-    const ownerMap = new Map(owners.map((owner) => [owner.clerkUserId, safeOwner(owner)]));
-    const stores = rows.map((store) => ({ ...safeStore(store), owner: ownerMap.get(store.ownerClerkUserId) ?? { name: "", email: "", phone: "" } }));
+    const ownerIds = [...new Set(rows.map((store) => store.ownerUserId).filter(Boolean))];
+    const owners = ownerIds.length ? await UserModel.find({ _id: { $in: ownerIds } }).select("firstName lastName email phone").lean() : [];
+    const ownerMap = new Map(owners.map((owner) => [String(owner._id), safeOwner(owner)]));
+    const stores = rows.map((store) => ({ ...safeStore(store), owner: ownerMap.get(store.ownerUserId) ?? { name: "", email: "", phone: "" } }));
     return res.json({ stores, page, limit, total });
+  }));
+
+  router.patch("/admin/:storeId/owner", asyncHandler(async (req, res) => {
+    const userId = req.body?.userId;
+    if (Object.keys(req.body || {}).some((key) => key !== "userId") || typeof userId !== "string" || !/^[a-f\d]{24}$/i.test(userId)) throw new OrderWorkflowError(400, "INVALID_STORE_OWNER", "Provide a Go-Shopper user ID.");
+    const storeFilter = /^[a-f\d]{24}$/i.test(req.params.storeId) ? { _id: req.params.storeId } : { slug: req.params.storeId.toLowerCase() };
+    const [store, owner] = await Promise.all([StoreModel.findOne(storeFilter), UserModel.findById(userId).select("role approvalStatus emailVerified phoneVerified isSuspended")]);
+    if (!store) return res.status(404).json({ error: { code: "STORE_NOT_FOUND", message: "Store not found." } });
+    if (!owner || owner.role !== "supermarket" || owner.approvalStatus !== "approved" || !owner.emailVerified || !owner.phoneVerified || owner.isSuspended) throw new OrderWorkflowError(409, "STORE_OWNER_NOT_APPROVED", "The new owner must be a verified, approved supermarket account.");
+    const priorOwnerUserId = store.ownerUserId || "";
+    store.ownerUserId = String(owner._id); await store.save();
+    await AuditModel.create({ actorUserId: req.auth.userId, action: "store_owner_assigned", targetType: "store", targetId: store.slug, metadata: { priorOwnerUserId, ownerUserId: String(owner._id) } });
+    return res.json({ store: safeStore(store.toObject ? store.toObject() : store) });
   }));
 
   router.patch("/admin/:storeId/approval", asyncHandler(async (req, res) => {
@@ -77,12 +80,12 @@ export function createAdminStoresRouter({ StoreModel = Store, ProductModel = Pro
     const store = await findStore(StoreModel, req.params.storeId);
     if (!store) return res.status(404).json({ error: { code: "STORE_NOT_FOUND", message: "Store not found" } });
     if (store.approvalStatus !== "pending" && !(store.approvalStatus == null && !store.isApproved)) throw new OrderWorkflowError(409, "STORE_NOT_PENDING", "Only a pending application can be approved or rejected.");
-    const auth = req.auth || getAuth(req);
+    const auth = req.auth;
     const updated = await StoreModel.findByIdAndUpdate(store._id, { $set: {
       isApproved: decision === "approved", approvalStatus: decision,
       approvalReason: decision === "rejected" ? reason : "",
     } }, { new: true, runValidators: true });
-    await AuditModel.create({ actorClerkUserId: auth.userId, action: `store_${decision}`, targetType: "store", targetId: store.slug, reason, metadata: { approvalStatus: decision } });
+    await AuditModel.create({ actorUserId: auth.userId, action: `store_${decision}`, targetType: "store", targetId: store.slug, reason, metadata: { approvalStatus: decision } });
     return res.json({ store: safeStore(updated.toObject()) });
   }));
 
@@ -93,12 +96,12 @@ export function createAdminStoresRouter({ StoreModel = Store, ProductModel = Pro
     const store = await findStore(StoreModel, req.params.storeId);
     if (!store) return res.status(404).json({ error: { code: "STORE_NOT_FOUND", message: "Store not found" } });
     if (req.body.isActive && !store.isApproved) throw new OrderWorkflowError(409, "STORE_NOT_APPROVED", "A store must be approved before it can be reactivated.");
-    const auth = req.auth || getAuth(req);
+    const auth = req.auth;
     const updated = await StoreModel.findByIdAndUpdate(store._id, { $set: {
       isActive: req.body.isActive, suspensionReason: req.body.isActive ? "" : reason,
       suspendedAt: req.body.isActive ? null : new Date(),
     } }, { new: true, runValidators: true });
-    await AuditModel.create({ actorClerkUserId: auth.userId, action: req.body.isActive ? "store_reactivated" : "store_suspended", targetType: "store", targetId: store.slug, reason, metadata: { isActive: req.body.isActive } });
+    await AuditModel.create({ actorUserId: auth.userId, action: req.body.isActive ? "store_reactivated" : "store_suspended", targetType: "store", targetId: store.slug, reason, metadata: { isActive: req.body.isActive } });
     return res.json({ store: safeStore(updated.toObject()) });
   }));
 
@@ -118,7 +121,7 @@ export function createAdminStoresRouter({ StoreModel = Store, ProductModel = Pro
     const store = await findStore(StoreModel, req.params.storeId);
     if (!store) return res.status(404).json({ error: { code: "STORE_NOT_FOUND", message: "Store not found" } });
     const [owner, productCount] = await Promise.all([
-      UserModel.findOne({ clerkUserId: store.ownerClerkUserId }).select("firstName lastName email phone").lean(),
+      UserModel.findById(store.ownerUserId).select("firstName lastName email phone").lean(),
       ProductModel.countDocuments({ storeId: store._id }),
     ]);
     return res.json({ store: { ...safeStore(store), owner: owner ? safeOwner(owner) : null, productCount } });

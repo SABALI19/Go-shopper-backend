@@ -8,8 +8,8 @@ import { createOrdersRouter } from "./orders.js";
 import { createStoreOrdersRouter } from "./storeOrders.js";
 
 const storesSeed = [
-  { _id: "store-db-a", slug: "alpha", name: "Alpha Supermarket", ownerClerkUserId: "store-owner-a", isActive: true, isApproved: true },
-  { _id: "store-db-b", slug: "beta", name: "Beta Supermarket", ownerClerkUserId: "store-owner-b", isActive: true, isApproved: true },
+  { _id: "store-db-a", slug: "alpha", name: "Alpha Supermarket", ownerUserId: "store-owner-a", isActive: true, isApproved: true },
+  { _id: "store-db-b", slug: "beta", name: "Beta Supermarket", ownerUserId: "store-owner-b", isActive: true, isApproved: true },
 ];
 const productsSeed = [
   { _id: "product-db-a", storeId: "store-db-a", productKey: "rice", name: "Rice", priceKobo: 900_000, stockQuantity: 5, isAvailable: true },
@@ -101,7 +101,7 @@ function makeWorld() {
     find(filter) {
       return query(() => db.parents.filter((parent) => {
         if (filter._id?.$in && !filter._id.$in.some((id) => String(id) === String(parent._id))) return false;
-        if (filter.customerClerkUserId && parent.customerClerkUserId !== filter.customerClerkUserId) return false;
+        if (filter.customerUserId && parent.customerUserId !== filter.customerUserId) return false;
         if (filter.status && parent.status !== filter.status) return false;
         if (filter.paymentStatus && parent.paymentStatus !== filter.paymentStatus) return false;
         if (filter.reservationStatus && parent.reservationStatus !== filter.reservationStatus) return false;
@@ -109,7 +109,7 @@ function makeWorld() {
         return true;
       }));
     },
-    async countDocuments(filter) { return db.parents.filter((parent) => parent.customerClerkUserId === filter.customerClerkUserId).length; },
+    async countDocuments(filter) { return db.parents.filter((parent) => parent.customerUserId === filter.customerUserId).length; },
     async updateOne(filter, update) {
       const parent = db.parents.find((entry) => matches(entry, filter));
       if (!parent) return { modifiedCount: 0 };
@@ -235,7 +235,7 @@ async function serviceCreate(world, { items = oneStoreItems, key = "request-key-
   const input = createInput(items, key);
   assert.equal(input.error, undefined);
   return createParentOrder({
-    customerClerkUserId: customerId,
+    customerUserId: customerId,
     input,
     pricing: fees,
     reservationTtlMinutes: 15,
@@ -412,12 +412,12 @@ test("customer cancellation and reservation expiry both restore inventory exactl
   const created = await serviceCreate(world, { key: "cancel-order-key" });
   const cancelled = await cancelPendingOrder({
     orderId: created.order.orderNumber,
-    customerClerkUserId: "customer-a",
+    customerUserId: "customer-a",
     ...world,
   });
   assert.equal(cancelled.status, "cancelled");
   assert.equal(world.db.products[0].stockQuantity, 5);
-  await cancelPendingOrder({ orderId: created.order.orderNumber, customerClerkUserId: "customer-a", ...world });
+  await cancelPendingOrder({ orderId: created.order.orderNumber, customerUserId: "customer-a", ...world });
   assert.equal(world.db.products[0].stockQuantity, 5);
 
   const second = await serviceCreate(world, { key: "expire-order-key" });
@@ -427,6 +427,28 @@ test("customer cancellation and reservation expiry both restore inventory exactl
   assert.equal(world.db.parents[1].status, "cancelled");
   assert.equal(world.db.products[0].stockQuantity, 5);
   assert.ok(second.order.orderNumber);
+});
+
+test("reservation expiry processes only expired unpaid held reservations", async () => {
+  const world = makeWorld();
+  await serviceCreate(world, { key: "expired-pending-order" });
+  await serviceCreate(world, { key: "not-yet-expired-order" });
+  await serviceCreate(world, { key: "already-paid-order" });
+  world.db.parents[0].reservationExpiresAt = new Date(0);
+  world.db.parents[1].reservationExpiresAt = new Date(Date.now() + 60_000);
+  world.db.parents[2].reservationExpiresAt = new Date(0);
+  world.db.parents[2].paymentStatus = "paid";
+
+  const released = await expirePendingOrderReservations({ ...world, now: new Date() });
+
+  assert.equal(released, 1);
+  assert.equal(world.db.parents[0].reservationStatus, "released");
+  assert.equal(world.db.parents[0].status, "cancelled");
+  assert.equal(world.db.parents[1].reservationStatus, "held");
+  assert.equal(world.db.parents[1].status, "pending_payment");
+  assert.equal(world.db.parents[2].reservationStatus, "held");
+  assert.equal(world.db.parents[2].status, "pending_payment");
+  assert.equal(world.db.products[0].stockQuantity, 3);
 });
 
 test("requires authentication and rejects customer-supplied pricing on order creation", async () => {

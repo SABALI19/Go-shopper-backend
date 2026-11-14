@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { getAuth } from "@clerk/express";
 import mongoose from "mongoose";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { getUserRole, requireAuth, requireRoles } from "../middleware/auth.js";
@@ -112,10 +111,10 @@ export function createStoreOrdersRouter({
       SubOrderModel.countDocuments(filter),
     ]);
     const deliveries = subOrders.length ? await DeliveryModel.find({ subOrderId: { $in: subOrders.map((entry) => entry._id) } }).lean() : [];
-    const riders = deliveries.length ? await UserModel.find({ clerkUserId: { $in: deliveries.map((entry) => entry.assignedRiderClerkUserId).filter(Boolean) } }).select("clerkUserId firstName lastName phone").lean() : [];
-    const riderById = new Map(riders.map((rider) => [rider.clerkUserId, rider]));
+    const riders = deliveries.length ? await UserModel.find({ _id: { $in: deliveries.map((entry) => entry.assignedRiderUserId).filter(Boolean) } }).select("_id firstName lastName phone").lean() : [];
+    const riderById = new Map(riders.map((rider) => [rider._id, rider]));
     const deliveryByOrder = new Map(deliveries.map((entry) => [String(entry.subOrderId), entry]));
-    return res.json({ orders: subOrders.map((entry) => { const delivery = deliveryByOrder.get(String(entry._id)); return { ...publicStoreSummary(entry), deliveryProgress: safeStoreDelivery(delivery, riderById.get(delivery?.assignedRiderClerkUserId)) }; }), page, limit, total });
+    return res.json({ orders: subOrders.map((entry) => { const delivery = deliveryByOrder.get(String(entry._id)); return { ...publicStoreSummary(entry), deliveryProgress: safeStoreDelivery(delivery, riderById.get(delivery?.assignedRiderUserId)) }; }), page, limit, total });
   }));
 
   router.get("/:storeId/orders/:orderId", authenticate, authorizeStore, asyncHandler(async (req, res) => {
@@ -125,7 +124,7 @@ export function createStoreOrdersRouter({
     if (!subOrder) return res.status(404).json({ error: { code: "SUB_ORDER_NOT_FOUND", message: "Order not found for this supermarket" } });
     const parent = await ParentOrderModel.findById(subOrder.parentOrderId).select("orderNumber delivery status paymentStatus createdAt updatedAt").lean();
     const deliveryRecord = await DeliveryModel.findOne({ subOrderId: subOrder._id }).lean();
-    const assignedRider = deliveryRecord?.assignedRiderClerkUserId ? await UserModel.findOne({ clerkUserId: deliveryRecord.assignedRiderClerkUserId }).select("firstName lastName phone").lean() : null;
+    const assignedRider = deliveryRecord?.assignedRiderUserId ? await UserModel.findOne({ _id: deliveryRecord.assignedRiderUserId }).select("firstName lastName phone").lean() : null;
     return res.json({ order: {
       ...publicStoreSummary(subOrder),
       deliveryProgress: safeStoreDelivery(deliveryRecord, assignedRider),
@@ -218,14 +217,14 @@ export function createStoreOrdersRouter({
         if (!updated) throw new OrderWorkflowError(409, "ORDER_CHANGED", "The order status changed. Refresh and try again.");
 
         if (nextStatus === "ready_for_dispatch") {
-          const auth = req.auth || getAuth(req);
+          const auth = req.auth;
           await DeliveryModel.updateOne({ subOrderId: subOrder._id }, { $setOnInsert: {
             parentOrderId: parent._id, parentOrderNumber: parent.orderNumber,
             subOrderId: subOrder._id, subOrderNumber: subOrder.subOrderNumber,
             storeId: access.store._id, storeSlug: access.store.slug, storeName: access.store.name,
-            customerClerkUserId: parent.customerClerkUserId, destination: parent.delivery,
+            customerUserId: parent.customerUserId, destination: parent.delivery,
             status: "awaiting_assignment",
-            history: [{ actorClerkUserId: auth.userId, actorRole: "supermarket", action: "ready_for_pickup", fromStatus: "", toStatus: "awaiting_assignment", createdAt: new Date() }],
+            history: [{ actorUserId: auth.userId, actorRole: "supermarket", action: "ready_for_pickup", fromStatus: "", toStatus: "awaiting_assignment", createdAt: new Date() }],
           } }, { upsert: true, session, runValidators: true });
         }
 
@@ -263,12 +262,12 @@ export function createStoreOrdersRouter({
         const parent = await ParentOrderModel.findById(subOrder.parentOrderId).session(session).lean();
         const delivery = await DeliveryModel.findOne({ subOrderId: subOrder._id }).session(session).lean();
         if (!parent || parent.paymentStatus !== "paid" || subOrder.status !== "ready_for_dispatch") throw new OrderWorkflowError(409, "HANDOVER_NOT_READY", "Only a paid order ready for pickup can be handed over.");
-        if (!delivery || delivery.status !== "arrived_at_pickup" || !delivery.assignedRiderClerkUserId) throw new OrderWorkflowError(409, "RIDER_NOT_READY", "The assigned rider must arrive before handover.");
+        if (!delivery || delivery.status !== "arrived_at_pickup" || !delivery.assignedRiderUserId) throw new OrderWorkflowError(409, "RIDER_NOT_READY", "The assigned rider must arrive before handover.");
         const now = new Date();
-        const auth = req.auth || getAuth(req);
+        const auth = req.auth;
         const updatedDelivery = await DeliveryModel.findOneAndUpdate(
-          { _id: delivery._id, status: "arrived_at_pickup", assignedRiderClerkUserId: delivery.assignedRiderClerkUserId },
-          { $set: { status: "picked_up", pickedUpAt: now }, $push: { history: { actorClerkUserId: auth.userId, actorRole: "supermarket", action: "store_confirmed_handover", fromStatus: "arrived_at_pickup", toStatus: "picked_up", createdAt: now } } },
+          { _id: delivery._id, status: "arrived_at_pickup", assignedRiderUserId: delivery.assignedRiderUserId },
+          { $set: { status: "picked_up", pickedUpAt: now }, $push: { history: { actorUserId: auth.userId, actorRole: "supermarket", action: "store_confirmed_handover", fromStatus: "arrived_at_pickup", toStatus: "picked_up", createdAt: now } } },
           { new: true, session, runValidators: true },
         ).lean();
         const updatedOrder = await SubOrderModel.findOneAndUpdate(
@@ -290,15 +289,15 @@ const SUB_ORDER_STATUSES = new Set(["pending_payment", "pending_fulfilment", "ac
 
 async function resolveStoreAccess({ req, storeKey, StoreModel, roleProvider }) {
   const stores = await StoreModel.find({ $or: storeLookup(storeKey) })
-    .select("_id slug name ownerClerkUserId isActive isApproved")
+    .select("_id slug name ownerUserId isActive isApproved")
     .lean();
   const isMongoId = /^[a-f\d]{24}$/i.test(storeKey);
   const store = (isMongoId ? stores.find((candidate) => String(candidate._id).toLowerCase() === storeKey.toLowerCase()) : null)
     ?? stores.find((candidate) => candidate.slug === storeKey.toLowerCase());
   if (!store) return { response: { status: 404, body: { error: { code: "STORE_NOT_FOUND", message: "Store not found" } } } };
-  const auth = req.auth || getAuth(req);
+  const auth = req.auth;
   const role = await roleProvider(auth);
-  if (role !== "admin" && store.ownerClerkUserId !== auth.userId) {
+  if (role !== "admin" && store.ownerUserId !== auth.userId) {
     return { response: { status: 404, body: { error: { code: "STORE_NOT_FOUND", message: "Store not found" } } } };
   }
   return { store };
@@ -360,6 +359,6 @@ function publicStoreSummary(subOrder) {
 
 function safeStoreDelivery(delivery, rider) {
   if (!delivery) return null;
-  return { id: String(delivery._id), status: delivery.status, assigned: Boolean(delivery.assignedRiderClerkUserId), rider: rider ? { firstName: rider.firstName || "", lastName: rider.lastName || "", phone: rider.phone || "" } : null, assignedAt: delivery.assignedAt, acceptedAt: delivery.acceptedAt, arrivedAt: delivery.arrivedAt, pickedUpAt: delivery.pickedUpAt, dispatchedAt: delivery.dispatchedAt, deliveredAt: delivery.deliveredAt, failedAt: delivery.failedAt, failureReason: delivery.failureReason || "" };
+  return { id: String(delivery._id), status: delivery.status, assigned: Boolean(delivery.assignedRiderUserId), rider: rider ? { firstName: rider.firstName || "", lastName: rider.lastName || "", phone: rider.phone || "" } : null, assignedAt: delivery.assignedAt, acceptedAt: delivery.acceptedAt, arrivedAt: delivery.arrivedAt, pickedUpAt: delivery.pickedUpAt, dispatchedAt: delivery.dispatchedAt, deliveredAt: delivery.deliveredAt, failedAt: delivery.failedAt, failureReason: delivery.failureReason || "" };
 }
 

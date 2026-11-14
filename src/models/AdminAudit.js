@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 
 const adminAuditSchema = new mongoose.Schema({
-  actorClerkUserId: { type: String, required: true, index: true },
+  actorUserId: { type: String, required: true, index: true },
   action: { type: String, required: true, trim: true, maxlength: 100 },
   targetType: { type: String, required: true, enum: ["store", "user", "platform_settings", "order", "delivery", "application"], index: true },
   targetId: { type: String, required: true, index: true },

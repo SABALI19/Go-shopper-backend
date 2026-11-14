@@ -175,9 +175,9 @@ export async function requestStoreCannotFulfil({
   return result;
 }
 
-export async function getCustomerActionRequest({ orderId, customerClerkUserId, ParentOrderModel = ParentOrder, SubOrderModel = SubOrder }) {
+export async function getCustomerActionRequest({ orderId, customerUserId, ParentOrderModel = ParentOrder, SubOrderModel = SubOrder }) {
   const query = /^[a-f\d]{24}$/i.test(orderId) ? { _id: orderId } : { orderNumber: orderId };
-  const parent = await ParentOrderModel.findOne({ ...query, customerClerkUserId }).lean();
+  const parent = await ParentOrderModel.findOne({ ...query, customerUserId }).lean();
   if (!parent) return null;
   if (parent.customerAction?.decision !== "pending" || !parent.customerAction?.affectedSubOrderId) {
     throw new OrderWorkflowError(404, "NO_PENDING_CUSTOMER_ACTION", "There is no pending supermarket decision for this order.");
@@ -199,7 +199,7 @@ export async function getCustomerActionRequest({ orderId, customerClerkUserId, P
 }
 
 export async function decideCustomerAction({
-  orderId, customerClerkUserId, decision, ParentOrderModel = ParentOrder, SubOrderModel = SubOrder,
+  orderId, customerUserId, decision, ParentOrderModel = ParentOrder, SubOrderModel = SubOrder,
   ProductModel = Product, connection = mongoose.connection,
 }) {
   if (!["proceed_remaining", "cancel_remaining"].includes(decision)) {
@@ -208,7 +208,7 @@ export async function decideCustomerAction({
   const idQuery = /^[a-f\d]{24}$/i.test(orderId) ? { _id: orderId } : { orderNumber: orderId };
   let found = false;
   await runTransaction(connection, async (session) => {
-    const parent = await ParentOrderModel.findOne({ ...idQuery, customerClerkUserId }).session(session).lean();
+    const parent = await ParentOrderModel.findOne({ ...idQuery, customerUserId }).session(session).lean();
     if (!parent) return;
     found = true;
     if (parent.customerAction?.decision === decision) return; // idempotent retry
@@ -266,12 +266,12 @@ export async function decideCustomerAction({
       parentUpdate.reservationStatus = "released";
       parentUpdate.reservationReleasedAt = now;
     }
-    const updatedParent = await ParentOrderModel.updateOne({ _id: parent._id, customerClerkUserId }, { $set: parentUpdate }, { session });
+    const updatedParent = await ParentOrderModel.updateOne({ _id: parent._id, customerUserId }, { $set: parentUpdate }, { session });
     if ((updatedParent.modifiedCount ?? updatedParent.nModified) !== 1) throw new OrderWorkflowError(409, "CUSTOMER_DECISION_ALREADY_PROCESSED", "This decision was processed by another request.");
   });
   if (!found) return null;
   const orderQuery = /^[a-f\d]{24}$/i.test(orderId) ? { _id: orderId } : { orderNumber: orderId };
-  const parent = await ParentOrderModel.findOne({ ...orderQuery, customerClerkUserId }).lean();
+  const parent = await ParentOrderModel.findOne({ ...orderQuery, customerUserId }).lean();
   const children = await SubOrderModel.find({ parentOrderId: parent._id }).sort({ createdAt: 1 }).lean();
   return publicParentOrder(parent, children);
 }

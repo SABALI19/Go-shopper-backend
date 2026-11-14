@@ -75,23 +75,23 @@ test("store approval, rejection reasons, suspension, reactivation, and audit rec
 });
 
 test("customer account search returns sanitized records and blocks admin suspension", async () => {
-  const records = [{ _id: "012345678901234567890123", clerkUserId: "secret-clerk-id", firstName: "Ada", email: "ada@example.com", role: "customer", isSuspended: false }];
+  const records = [{ _id: "012345678901234567890123", firstName: "Ada", email: "ada@example.com", role: "customer", isSuspended: false }];
   let receivedFilter;
   const UserModel = { find(filter) { receivedFilter = filter; return query(records); }, countDocuments: async () => 1, findById: () => query(null) };
   const app = makeApp("admin", [{ path: "/api/users", router: (auth) => createUsersRouter({ ...auth, UserModel }) }]);
   const result = await request(app, { path: "/api/users?q=ada&role=customer&status=active" });
-  assert.equal(result.status, 200); assert.equal(receivedFilter.role, "customer"); assert.equal(receivedFilter.isSuspended.$ne, true); assert.ok(receivedFilter.$or[2].email instanceof RegExp); assert.equal("clerkUserId" in result.body.users[0], false);
+  assert.equal(result.status, 200); assert.equal(receivedFilter.role, "customer"); assert.equal(receivedFilter.isSuspended.$ne, true); assert.ok(receivedFilter.$or[2].email instanceof RegExp); assert.equal(result.body.users[0].id, records[0]._id);
 });
 
 test("customer suspension requires a reason, is audited, and cannot target admin accounts", async () => {
-  const customer = { _id: "012345678901234567890123", clerkUserId: "customer-clerk", firstName: "Ada", role: "customer", isSuspended: false };
-  const admin = { _id: "012345678901234567890124", clerkUserId: "admin-clerk", firstName: "Platform", role: "admin", isSuspended: false };
+  const customer = { _id: "012345678901234567890123", firstName: "Ada", role: "customer", isSuspended: false };
+  const admin = { _id: "012345678901234567890124", firstName: "Platform", role: "admin", isSuspended: false };
   const audits = [];
   const UserModel = {
     findById(id) { return query(String(id) === customer._id ? customer : admin); },
     async findByIdAndUpdate(id, update) { const user = String(id) === customer._id ? customer : admin; Object.assign(user, update.$set); return { ...user, toObject() { return { ...user }; } }; },
   };
-  const app = makeApp("admin", [{ path: "/api/users", router: (auth) => createUsersRouter({ ...auth, UserModel, AuditModel: { async create(record) { audits.push(record); } } }) }]);
+  const app = makeApp("admin", [{ path: "/api/users", router: (auth) => createUsersRouter({ ...auth, UserModel, SessionModel: { async updateMany() { return { modifiedCount: 1 }; } }, AuditModel: { async create(record) { audits.push(record); } } }) }]);
   assert.equal((await request(app, { method: "PATCH", path: `/api/users/admin/${customer._id}/status`, body: { isSuspended: true } })).status, 400);
   assert.equal((await request(app, { method: "PATCH", path: `/api/users/admin/${customer._id}/status`, body: { isSuspended: true, reason: "Abuse report review" } })).status, 200);
   assert.equal(customer.isSuspended, true); assert.equal(audits[0].action, "user_suspended"); assert.equal(audits[0].reason, "Abuse report review");
@@ -109,7 +109,7 @@ test("admin order list applies reference, payment, status, customer-action and s
 });
 
 test("admin order detail exposes item exception and refund obligation history read-only", async () => {
-  const parent = { _id: "parent-db-id", orderNumber: "GS-1001", customerClerkUserId: "customer-clerk", delivery: { fullName: "Ada", address: "Lagos", phone: "0800" }, merchandiseSubtotalKobo: 900_000, deliveryFeeKobo: 10_000, serviceFeeKobo: 0, totalKobo: 910_000, status: "customer_action_required", paymentStatus: "paid", customerActionHistory: [{ reason: "Customer approval needed", decision: "pending" }], refundObligations: [{ key: "item-1", kind: "item_unavailable", storeName: "Fresh Mart", productName: "Rice", amountKobo: 30_000, status: "pending", reason: "Unavailable", createdAt: new Date() }] };
+  const parent = { _id: "parent-db-id", orderNumber: "GS-1001", customerUserId: "customer-user-id", delivery: { fullName: "Ada", address: "Lagos", phone: "0800" }, merchandiseSubtotalKobo: 900_000, deliveryFeeKobo: 10_000, serviceFeeKobo: 0, totalKobo: 910_000, status: "customer_action_required", paymentStatus: "paid", customerActionHistory: [{ reason: "Customer approval needed", decision: "pending" }], refundObligations: [{ key: "item-1", kind: "item_unavailable", storeName: "Fresh Mart", productName: "Rice", amountKobo: 30_000, status: "pending", reason: "Unavailable", createdAt: new Date() }] };
   const child = { parentOrderId: parent._id, subOrderNumber: "GS-1001-FRESH", storeSlug: "fresh", storeName: "Fresh Mart", items: [{ productKey: "rice", productName: "Rice", quantity: 1, lineTotalKobo: 30_000, unitPriceKobo: 30_000, fulfilmentStatus: "unavailable", unavailableReason: "Out of stock", auditEvents: [{ action: "item_unavailable", actorRole: "supermarket", reason: "Out of stock", createdAt: new Date() }] }] };
   const ParentOrderModel = { findOne: () => query(parent) };
   const SubOrderModel = { find: () => query([child]) };

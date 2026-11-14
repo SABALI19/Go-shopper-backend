@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import mongoose from "mongoose";
-import { configureClerk } from "./middleware/auth.js";
+import { configureAuth } from "./middleware/auth.js";
 import { asyncHandler } from "./middleware/asyncHandler.js";
 import { errorHandler, notFound } from "./middleware/errors.js";
 import { createUsersRouter } from "./routes/users.js";
@@ -16,6 +16,7 @@ import { createRiderRouter } from "./routes/rider.js";
 import { createAdminDeliveriesRouter } from "./routes/adminDeliveries.js";
 import { applicationsRouter, createAdminApplicationsRouter } from "./routes/applications.js";
 import { requireRoles } from "./middleware/auth.js";
+import { authRouter } from "./routes/auth.js";
 
 export function createApp(config) {
   const app = express();
@@ -26,7 +27,8 @@ export function createApp(config) {
       return callback(new Error("Origin is not allowed by CORS"));
     },
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Authorization", "Content-Type"],
+    allowedHeaders: ["Authorization", "Content-Type", "X-CSRF-Token"],
+    credentials: true,
   }));
   app.use(express.json({ limit: "1mb" }));
 
@@ -34,7 +36,8 @@ export function createApp(config) {
     res.json({ status: "ok", database: mongoose.connection.readyState === 1 ? "connected" : "disconnected" });
   });
 
-  configureClerk(app, config);
+  configureAuth(app, config);
+  app.use("/api/auth", authRouter);
   const pricingProvider = () => getEffectiveCheckoutPricing(undefined, () => config.checkoutPricing || getCheckoutPricing());
   app.use("/api/checkout", createCheckoutRouter({
     pricingProvider,
@@ -47,7 +50,7 @@ export function createApp(config) {
   app.use("/api/admin/deliveries", createAdminDeliveriesRouter());
   app.use("/api/applications", applicationsRouter);
   app.use("/api/admin/applications", createAdminApplicationsRouter({ authorizeAdmin: requireRoles("admin") }));
-  app.use("/api/users", createUsersRouter({ adminEmail: config.adminEmail }));
+  app.use("/api/users", createUsersRouter());
   app.use("/api/admin", createAdminRouter());
   app.use("/api/stores", createAdminStoresRouter());
   app.use("/api/stores", createStoreOrdersRouter());
