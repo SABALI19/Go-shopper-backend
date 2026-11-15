@@ -40,17 +40,22 @@ test("admin endpoints reject unauthenticated, customer, and supermarket users", 
 });
 
 test("settings require integer kobo values, persist changes, and create an audit record", async () => {
-  assert.equal(validateSettings({ minimumStoreSubtotalKobo: 900_000, deliveryFeeKobo: 0, serviceFeeKobo: 200 }).error, undefined);
-  assert.ok(validateSettings({ minimumStoreSubtotalKobo: 9000.5, deliveryFeeKobo: 0, serviceFeeKobo: 0 }).error);
-  assert.ok(validateSettings({ minimumStoreSubtotalKobo: -1, deliveryFeeKobo: 0, serviceFeeKobo: 0 }).error);
-  assert.ok(validateSettings({ minimumStoreSubtotalKobo: 10, deliveryFeeKobo: 0, serviceFeeKobo: 0, commission: 3 }).error);
+  assert.equal(validateSettings({ multiStoreCheckoutMinimumKobo: 900_000, deliveryFeeKobo: 0, serviceFeeKobo: 200 }).error, undefined);
+  assert.ok(validateSettings({ multiStoreCheckoutMinimumKobo: 9000.5, deliveryFeeKobo: 0, serviceFeeKobo: 0 }).error);
+  assert.ok(validateSettings({ multiStoreCheckoutMinimumKobo: -1, deliveryFeeKobo: 0, serviceFeeKobo: 0 }).error);
+  assert.ok(validateSettings({ multiStoreCheckoutMinimumKobo: 100_000_001, deliveryFeeKobo: 0, serviceFeeKobo: 0 }).error);
+  assert.ok(validateSettings({ multiStoreCheckoutMinimumKobo: 10, deliveryFeeKobo: 0, serviceFeeKobo: 0, commission: 3 }).error);
   const audits = []; let saved;
-  const SettingsModel = { findById: () => query(null), async findOneAndUpdate(_filter, update) { saved = { ...update.$set }; return saved; } };
+  const SettingsModel = { findById: () => query({ minimumStoreSubtotalKobo: 850_000, deliveryFeeKobo: 0, serviceFeeKobo: 0 }), async findOneAndUpdate(_filter, update) { saved = { ...update.$set }; return saved; } };
   const AuditModel = { async create(record) { audits.push(record); } };
   const app = makeApp("admin", [{ path: "/api/admin", router: (auth) => createAdminRouter({ ...auth, SettingsModel, AuditModel }) }]);
-  const result = await request(app, { method: "PUT", path: "/api/admin/settings", body: { minimumStoreSubtotalKobo: 900_000, deliveryFeeKobo: 150_000, serviceFeeKobo: 5_000 } });
+  const result = await request(app, { method: "PUT", path: "/api/admin/settings", body: { multiStoreCheckoutMinimumKobo: 900_000, deliveryFeeKobo: 150_000, serviceFeeKobo: 5_000 } });
   assert.equal(result.status, 200); assert.equal(saved.updatedBy, "admin-1"); assert.equal(audits[0].action, "platform_settings_updated");
-  assert.equal((await request(app, { method: "PUT", path: "/api/admin/settings", body: { minimumStoreSubtotalKobo: 0, deliveryFeeKobo: 0, serviceFeeKobo: 0 } })).status, 400);
+  assert.equal(audits[0].metadata.multiStoreCheckoutMinimumKobo.newValue, 900_000);
+  assert.equal(audits[0].metadata.multiStoreCheckoutMinimumKobo.oldValue, 850_000);
+  assert.equal(audits[0].actorUserId, "admin-1");
+  assert.ok(audits[0].metadata.multiStoreCheckoutMinimumKobo.changedAt instanceof Date);
+  assert.equal((await request(app, { method: "PUT", path: "/api/admin/settings", body: { multiStoreCheckoutMinimumKobo: 0, deliveryFeeKobo: 0, serviceFeeKobo: 0 } })).status, 400);
 });
 
 test("store approval, rejection reasons, suspension, reactivation, and audit records are enforced", async () => {

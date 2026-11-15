@@ -99,7 +99,8 @@ export function createAdminRouter({
     const settings = await SettingsModel.findOneAndUpdate({ _id: "platform" }, {
       $set: { ...validation.settings, updatedBy: auth.userId },
     }, { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true });
-    await AuditModel.create({ actorUserId: auth.userId, action: "platform_settings_updated", targetType: "platform_settings", targetId: "platform", metadata: { before: prior ? pickSettings(prior) : null, after: validation.settings } });
+    const recordedAt = new Date();
+    await AuditModel.create({ actorUserId: auth.userId, action: "platform_settings_updated", targetType: "platform_settings", targetId: "platform", metadata: { before: prior ? pickSettings(prior) : null, after: validation.settings, multiStoreCheckoutMinimumKobo: { oldValue: prior?.multiStoreCheckoutMinimumKobo ?? prior?.minimumStoreSubtotalKobo ?? null, newValue: validation.settings.multiStoreCheckoutMinimumKobo, changedAt: recordedAt } }, createdAt: recordedAt });
     return res.json({ settings: publicSettings(settings) });
   }));
 
@@ -114,17 +115,18 @@ export async function readSettings(SettingsModel = PlatformSettings, pricingProv
 export async function getEffectiveCheckoutPricing(SettingsModel = PlatformSettings, envProvider = getCheckoutPricing) {
   const saved = await SettingsModel.findById("platform").lean();
   if (!saved) return envProvider();
-  return { minimumStoreSubtotalKobo: saved.minimumStoreSubtotalKobo, deliveryFeeKobo: saved.deliveryFeeKobo, serviceFeeKobo: saved.serviceFeeKobo };
+  return { multiStoreCheckoutMinimumKobo: saved.multiStoreCheckoutMinimumKobo ?? saved.minimumStoreSubtotalKobo ?? 900_000, deliveryFeeKobo: saved.deliveryFeeKobo, serviceFeeKobo: saved.serviceFeeKobo };
 }
 
 export function validateSettings(body) {
-  const fields = ["minimumStoreSubtotalKobo", "deliveryFeeKobo", "serviceFeeKobo"];
-  if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((key) => !fields.includes(key))) return { error: "Only minimumStoreSubtotalKobo, deliveryFeeKobo, and serviceFeeKobo are accepted." };
+  const fields = ["multiStoreCheckoutMinimumKobo", "deliveryFeeKobo", "serviceFeeKobo"];
+  if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).some((key) => !fields.includes(key))) return { error: "Only multiStoreCheckoutMinimumKobo, deliveryFeeKobo, and serviceFeeKobo are accepted." };
   const settings = {};
   for (const field of fields) {
     const amount = body[field];
-    const minimum = field === "minimumStoreSubtotalKobo" ? 1 : 0;
-    if (!Number.isSafeInteger(amount) || amount < minimum || amount > 1_000_000_000) return { error: `${field} must be an integer kobo amount between ${minimum} and 1000000000.` };
+    const minimum = field === "multiStoreCheckoutMinimumKobo" ? 1 : 0;
+    const maximum = field === "multiStoreCheckoutMinimumKobo" ? 100_000_000 : 1_000_000_000;
+    if (!Number.isSafeInteger(amount) || amount < minimum || amount > maximum) return { error: `${field} must be an integer kobo amount between ${minimum} and ${maximum}.` };
     settings[field] = amount;
   }
   return { settings };
@@ -135,7 +137,7 @@ export function safeUser(user) {
 }
 
 function publicSettings(settings) {
-  return { minimumStoreSubtotalKobo: settings.minimumStoreSubtotalKobo, deliveryFeeKobo: settings.deliveryFeeKobo, serviceFeeKobo: settings.serviceFeeKobo, source: "database", updatedAt: settings.updatedAt ?? null };
+  return { multiStoreCheckoutMinimumKobo: settings.multiStoreCheckoutMinimumKobo ?? settings.minimumStoreSubtotalKobo ?? 900_000, deliveryFeeKobo: settings.deliveryFeeKobo, serviceFeeKobo: settings.serviceFeeKobo, source: "database", updatedAt: settings.updatedAt ?? null };
 }
 function publicAdminOrder(parent, children = []) {
   const order = publicParentOrder(parent, children);
@@ -152,7 +154,7 @@ function publicAdminOrder(parent, children = []) {
     })),
   };
 }
-function pickSettings(settings) { return { minimumStoreSubtotalKobo: settings.minimumStoreSubtotalKobo, deliveryFeeKobo: settings.deliveryFeeKobo, serviceFeeKobo: settings.serviceFeeKobo }; }
+function pickSettings(settings) { return { multiStoreCheckoutMinimumKobo: settings.multiStoreCheckoutMinimumKobo ?? settings.minimumStoreSubtotalKobo ?? 900_000, deliveryFeeKobo: settings.deliveryFeeKobo, serviceFeeKobo: settings.serviceFeeKobo }; }
 function parsePagination(rawPage, rawLimit, defaultLimit) {
   const page = rawPage === undefined ? 1 : Number(rawPage);
   const limit = rawLimit === undefined ? defaultLimit : Number(rawLimit);

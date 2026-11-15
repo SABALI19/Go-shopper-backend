@@ -43,7 +43,7 @@ const parentOrderSchema = new mongoose.Schema({
   deliveryFeeKobo: { type: Number, required: true, min: 0, validate: Number.isSafeInteger },
   serviceFeeKobo: { type: Number, required: true, min: 0, validate: Number.isSafeInteger },
   totalKobo: { type: Number, required: true, min: 0, validate: Number.isSafeInteger },
-  minimumStoreSubtotalKobo: { type: Number, required: true, min: 0, validate: Number.isSafeInteger },
+  multiStoreCheckoutMinimumKobo: { type: Number, required: true, min: 0, validate: Number.isSafeInteger },
   status: {
     type: String,
     enum: ["pending_payment", "confirmed", "processing", "partially_fulfilled", "completed", "cancelled", "customer_action_required"],

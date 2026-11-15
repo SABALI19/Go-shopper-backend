@@ -64,15 +64,7 @@ export function buildCheckoutQuote(items, pricing) {
     stores.set(item.storeId, current);
   }
 
-  const storeQuotes = [...stores.values()].map((store) => {
-    const amountRemainingKobo = Math.max(0, pricing.minimumStoreSubtotalKobo - store.merchandiseSubtotalKobo);
-    return {
-      ...store,
-      minimumOrderKobo: pricing.minimumStoreSubtotalKobo,
-      eligible: amountRemainingKobo === 0,
-      amountRemainingKobo,
-    };
-  });
+  const storeQuotes = [...stores.values()];
   const merchandiseSubtotalKobo = storeQuotes.reduce((sum, store) => sum + store.merchandiseSubtotalKobo, 0);
   const deliveryFeeKobo = pricing.deliveryFeeKobo;
   const serviceFeeKobo = pricing.serviceFeeKobo;
@@ -81,12 +73,22 @@ export function buildCheckoutQuote(items, pricing) {
     throw Object.assign(new Error("The cart total is too large to quote"), { status: 400, code: "INVALID_CART_AMOUNT" });
   }
 
+  const storeCount = storeQuotes.length;
+  const isMultiStore = storeCount > 1;
+  const amountRemainingKobo = isMultiStore ? Math.max(0, pricing.multiStoreCheckoutMinimumKobo - merchandiseSubtotalKobo) : 0;
+  const isEligible = !isMultiStore || amountRemainingKobo === 0;
+
   return {
     stores: storeQuotes,
+    multiStoreMinimumKobo: pricing.multiStoreCheckoutMinimumKobo,
     merchandiseSubtotalKobo,
+    storeCount,
+    isMultiStore,
+    isEligible,
+    amountRemainingKobo,
     deliveryFeeKobo,
     serviceFeeKobo,
     totalKobo,
-    eligible: storeQuotes.length > 0 && storeQuotes.every((store) => store.eligible),
+    eligible: isEligible,
   };
 }

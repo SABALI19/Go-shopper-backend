@@ -70,7 +70,7 @@ async function quote(items, { authorization = "Bearer test-customer", role = "cu
       }
       next();
     },
-    pricingProvider: () => ({ minimumStoreSubtotalKobo: 900_000, deliveryFeeKobo: 12_000, serviceFeeKobo: 3_000 }),
+    pricingProvider: () => ({ multiStoreCheckoutMinimumKobo: 900_000, deliveryFeeKobo: 12_000, serviceFeeKobo: 3_000 }),
   }));
   const response = await new Promise((resolve, reject) => {
     const localServer = app.listen(0, "127.0.0.1", async () => {
@@ -92,56 +92,54 @@ async function quote(items, { authorization = "Bearer test-customer", role = "cu
   return response;
 }
 
-test("quotes below-minimum store as ineligible and excludes fees from its merchandise subtotal", async () => {
+test("allows a tiny subtotal from a single store", async () => {
   const result = await quote([{ storeId: "alpha-market", productId: "rice", quantity: 1 }], {
-    extraModels: { products: [{ ...baseProducts[0], priceKobo: 899_999 }] },
+    extraModels: { products: [{ ...baseProducts[0], priceKobo: 1 }] },
   });
   assert.equal(result.status, 200);
-  assert.equal(result.body.quote.stores[0].merchandiseSubtotalKobo, 899_999);
-  assert.equal(result.body.quote.stores[0].amountRemainingKobo, 1);
-  assert.equal(result.body.quote.stores[0].eligible, false);
+  assert.equal(result.body.quote.merchandiseSubtotalKobo, 1);
+  assert.equal(result.body.quote.storeCount, 1);
+  assert.equal(result.body.quote.isMultiStore, false);
+  assert.equal(result.body.quote.isEligible, true);
+  assert.equal(result.body.quote.amountRemainingKobo, 0);
   assert.equal(result.body.quote.deliveryFeeKobo, 12_000);
   assert.equal(result.body.quote.serviceFeeKobo, 3_000);
-  assert.equal(result.body.quote.eligible, false);
 });
 
-test("quotes a store at exactly the minimum as eligible", async () => {
-  const result = await quote([{ storeId: "alpha-market", productId: "rice", quantity: 1 }]);
+test("rejects a two-store quote below the combined minimum and excludes fees", async () => {
+  const result = await quote([{ storeId: "alpha-market", productId: "rice", quantity: 1 }, { storeId: "beta-market", productId: "oil", quantity: 1 }], {
+    extraModels: { products: [{ ...baseProducts[0], priceKobo: 400_000 }, { ...baseProducts[1], priceKobo: 499_999 }] },
+  });
   assert.equal(result.status, 200);
-  assert.equal(result.body.quote.stores[0].merchandiseSubtotalKobo, 900_000);
-  assert.equal(result.body.quote.stores[0].eligible, true);
-  assert.equal(result.body.quote.stores[0].amountRemainingKobo, 0);
+  assert.equal(result.body.quote.multiStoreMinimumKobo, 900_000);
+  assert.equal(result.body.quote.merchandiseSubtotalKobo, 899_999);
+  assert.equal(result.body.quote.storeCount, 2);
+  assert.equal(result.body.quote.isMultiStore, true);
+  assert.equal(result.body.quote.isEligible, false);
+  assert.equal(result.body.quote.amountRemainingKobo, 1);
 });
 
-test("quotes a store above the minimum and uses its database price", async () => {
-  const result = await quote([{ storeId: "alpha-market", productId: "rice", quantity: 2 }]);
+test("allows two stores totaling exactly the combined minimum", async () => {
+  const result = await quote([{ storeId: "alpha-market", productId: "rice", quantity: 1 }, { storeId: "beta-market", productId: "oil", quantity: 1 }], {
+    extraModels: { products: [{ ...baseProducts[0], priceKobo: 400_000 }, { ...baseProducts[1], priceKobo: 500_000 }] },
+  });
   assert.equal(result.status, 200);
-  assert.equal(result.body.quote.stores[0].items[0].unitPriceKobo, 900_000);
-  assert.equal(result.body.quote.stores[0].items[0].lineTotalKobo, 1_800_000);
-  assert.equal(result.body.quote.eligible, true);
+  assert.equal(result.body.quote.merchandiseSubtotalKobo, 900_000);
+  assert.equal(result.body.quote.isEligible, true);
+  assert.equal(result.body.quote.amountRemainingKobo, 0);
 });
 
-test("allows a combined quote when both supermarkets independently qualify", async () => {
+test("allows two stores above the combined minimum using live database prices", async () => {
   const result = await quote([
     { storeId: "alpha-market", productId: "rice", quantity: 1 },
     { storeId: "beta-market", productId: "oil", quantity: 2 },
   ]);
   assert.equal(result.status, 200);
   assert.equal(result.body.quote.stores.length, 2);
-  assert.equal(result.body.quote.stores.every((store) => store.eligible), true);
+  assert.equal(result.body.quote.isEligible, true);
+  assert.equal(result.body.quote.isMultiStore, true);
   assert.equal(result.body.quote.merchandiseSubtotalKobo, 1_900_000);
   assert.equal(result.body.quote.totalKobo, 1_915_000);
-});
-
-test("blocks the combined quote if any supermarket is below its own minimum", async () => {
-  const result = await quote([
-    { storeId: "alpha-market", productId: "rice", quantity: 1 },
-    { storeId: "beta-market", productId: "oil", quantity: 1 },
-  ]);
-  assert.equal(result.status, 200);
-  assert.equal(result.body.quote.stores[0].eligible, true);
-  assert.equal(result.body.quote.stores[1].eligible, false);
-  assert.equal(result.body.quote.eligible, false);
 });
 
 test("rejects unavailable products without substituting them", async () => {

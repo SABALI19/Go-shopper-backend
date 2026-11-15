@@ -8,8 +8,12 @@ function integerKobo(value, fallback, name) {
 }
 
 export function getCheckoutPricing(env = process.env) {
+  const multiStoreCheckoutMinimumKobo = integerKobo(env.MULTI_STORE_CHECKOUT_MINIMUM_KOBO, 900_000, "MULTI_STORE_CHECKOUT_MINIMUM_KOBO");
+  if (multiStoreCheckoutMinimumKobo < 1 || multiStoreCheckoutMinimumKobo > 100_000_000) {
+    throw new Error("MULTI_STORE_CHECKOUT_MINIMUM_KOBO must be between 1 and 100000000 kobo");
+  }
   return {
-    minimumStoreSubtotalKobo: integerKobo(env.MINIMUM_STORE_ORDER_KOBO, 900_000, "MINIMUM_STORE_ORDER_KOBO"),
+    multiStoreCheckoutMinimumKobo,
     deliveryFeeKobo: integerKobo(env.CHECKOUT_DELIVERY_FEE_KOBO, 0, "CHECKOUT_DELIVERY_FEE_KOBO"),
     serviceFeeKobo: integerKobo(env.CHECKOUT_SERVICE_FEE_KOBO, 0, "CHECKOUT_SERVICE_FEE_KOBO"),
   };

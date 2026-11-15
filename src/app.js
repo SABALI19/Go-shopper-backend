@@ -39,6 +39,10 @@ export function createApp(config) {
   configureAuth(app, config);
   app.use("/api/auth", authRouter);
   const pricingProvider = () => getEffectiveCheckoutPricing(undefined, () => config.checkoutPricing || getCheckoutPricing());
+  app.get("/api/config/checkout", asyncHandler(async (_req, res) => {
+    const pricing = await pricingProvider();
+    return res.json({ multiStoreCheckoutMinimumKobo: pricing.multiStoreCheckoutMinimumKobo });
+  }));
   app.use("/api/checkout", createCheckoutRouter({
     pricingProvider,
   }));

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import express from "express";
 import { errorHandler } from "../middleware/errors.js";
+import { buildCheckoutQuote } from "../features/checkout/pricing.js";
 import { cancelPendingOrder, createParentOrder, expirePendingOrderReservations, fingerprintOrderRequest, isValidSubOrderTransition, validateCreateOrderRequest } from "../features/orders/service.js";
 import { reportUnavailableItem } from "../features/orders/exceptions.js";
 import { createOrdersRouter } from "./orders.js";
@@ -219,7 +220,7 @@ function matches(record, filter) {
   });
 }
 
-const fees = { minimumStoreSubtotalKobo: 900_000, deliveryFeeKobo: 1_501, serviceFeeKobo: 100 };
+const fees = { multiStoreCheckoutMinimumKobo: 900_000, deliveryFeeKobo: 1_501, serviceFeeKobo: 100 };
 const delivery = { fullName: "Ada Customer", address: "12 Market Road, Lagos", phone: "+2348012345678" };
 const oneStoreItems = [{ storeId: "alpha", productId: "rice", quantity: 1 }];
 const multiStoreItems = [
@@ -323,6 +324,13 @@ test("creates a single-store parent order with one pending-payment sub-order", a
   assert.equal(result.order.totalKobo, 901_601);
 });
 
+test("allows a single-store order with a tiny merchandise subtotal", async () => {
+  const world = makeWorld();
+  world.db.products[0].priceKobo = 1;
+  const { order } = await serviceCreate(world);
+  assert.equal(order.merchandiseSubtotalKobo, 1);
+});
+
 test("splits a multi-store checkout into one parent and one child per store", async () => {
   const world = makeWorld();
   const { order } = await serviceCreate(world, { items: multiStoreItems });
@@ -334,10 +342,43 @@ test("splits a multi-store checkout into one parent and one child per store", as
   assert.equal(order.subOrders.reduce((sum, child) => sum + child.serviceFeeKobo, 0), fees.serviceFeeKobo);
 });
 
-test("enforces the minimum independently for each store and does not reserve on rejection", async () => {
+test("allows multi-store orders at and above the combined minimum", async () => {
+  const exact = makeWorld();
+  exact.db.products[0].priceKobo = 400_000;
+  exact.db.products[1].priceKobo = 500_000;
+  assert.equal((await serviceCreate(exact, { items: multiStoreItems })).order.merchandiseSubtotalKobo, 900_000);
+  const above = makeWorld();
+  above.db.products[0].priceKobo = 450_000;
+  above.db.products[1].priceKobo = 500_001;
+  assert.equal((await serviceCreate(above, { items: multiStoreItems })).order.merchandiseSubtotalKobo, 950_001);
+});
+
+test("rejects a multi-store total below the combined minimum and does not reserve inventory", async () => {
   const world = makeWorld();
-  world.db.products[1].priceKobo = 899_999;
-  await assert.rejects(serviceCreate(world, { items: multiStoreItems }), (error) => error.apiCode === "MINIMUM_ORDER_NOT_MET");
+  world.db.products[0].priceKobo = 400_000;
+  world.db.products[1].priceKobo = 499_999;
+  await assert.rejects(serviceCreate(world, { items: multiStoreItems }), (error) => error.apiCode === "MULTI_STORE_MINIMUM_NOT_MET" && error.message.includes("₦9,000.00") && error.message.includes("₦0.01"));
+  assert.equal(world.db.products[0].stockQuantity, 5);
+  assert.equal(world.db.products[1].stockQuantity, 5);
+  assert.equal(world.db.parents.length, 0);
+});
+
+test("rechecks live prices at order creation when a previously eligible quote drops below the minimum", async () => {
+  const world = makeWorld();
+  world.db.products[0].priceKobo = 450_000;
+  world.db.products[1].priceKobo = 450_000;
+  const quoted = buildCheckoutQuote(world.db.products.map((product) => ({
+    storeId: product.storeId === "store-db-a" ? "alpha" : "beta",
+    storeName: product.name,
+    productId: product.productKey,
+    productName: product.name,
+    unitPriceKobo: product.priceKobo,
+    quantity: 1,
+  })), fees);
+  assert.equal(quoted.isEligible, true);
+  assert.equal(quoted.merchandiseSubtotalKobo, fees.multiStoreCheckoutMinimumKobo);
+  world.db.products[1].priceKobo = 449_999;
+  await assert.rejects(serviceCreate(world, { items: multiStoreItems }), (error) => error.apiCode === "MULTI_STORE_MINIMUM_NOT_MET" && error.details.quote.amountRemainingKobo === 1);
   assert.equal(world.db.products[0].stockQuantity, 5);
   assert.equal(world.db.products[1].stockQuantity, 5);
   assert.equal(world.db.parents.length, 0);

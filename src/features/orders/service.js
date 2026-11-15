@@ -161,7 +161,7 @@ export function publicParentOrder(order, subOrders = []) {
     deliveryFeeKobo: order.deliveryFeeKobo,
     serviceFeeKobo: order.serviceFeeKobo,
     totalKobo: order.totalKobo,
-    minimumStoreSubtotalKobo: order.minimumStoreSubtotalKobo,
+    multiStoreCheckoutMinimumKobo: order.multiStoreCheckoutMinimumKobo ?? order.minimumStoreSubtotalKobo,
     paymentStatus: order.paymentStatus,
     status: order.status,
     cancelledAt: order.cancelledAt,
@@ -255,8 +255,9 @@ export async function createParentOrder({
       }
       checkDuplicateProducts(resolved.items);
       const quote = buildCheckoutQuote(resolved.items, pricing);
-      if (!quote.eligible) {
-        throw new OrderWorkflowError(409, "MINIMUM_ORDER_NOT_MET", "Each supermarket must independently meet its minimum merchandise subtotal.", { quote });
+      if (!quote.isEligible) {
+        const formatNaira = (kobo) => `₦${(kobo / 100).toLocaleString("en-NG", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        throw new OrderWorkflowError(409, "MULTI_STORE_MINIMUM_NOT_MET", `Orders from multiple stores require a combined merchandise subtotal of at least ${formatNaira(quote.multiStoreMinimumKobo)}. Add ${formatNaira(quote.amountRemainingKobo)} more to continue.`, { quote });
       }
 
       for (const item of resolved.items) {
@@ -286,7 +287,7 @@ export async function createParentOrder({
         deliveryFeeKobo: quote.deliveryFeeKobo,
         serviceFeeKobo: quote.serviceFeeKobo,
         totalKobo: quote.totalKobo,
-        minimumStoreSubtotalKobo: pricing.minimumStoreSubtotalKobo,
+        multiStoreCheckoutMinimumKobo: pricing.multiStoreCheckoutMinimumKobo,
         status: "pending_payment",
         paymentStatus: "pending",
         reservationStatus: "held",
