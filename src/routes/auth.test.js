@@ -59,6 +59,29 @@ test("role-specific registration endpoints assign fixed roles and return applica
   }
 });
 
+test("password reset email returns admins to the dedicated admin sign-in", async () => {
+  const previousWebUrl = process.env.WEB_APP_URL;
+  process.env.WEB_APP_URL = "https://web.test";
+  const challenges = [];
+  const admin = { _id: "admin-reset-id", email: "admin@example.com", firstName: "Admin", role: "admin" };
+  const UserModel = { findOne: () => query(admin) };
+  const ChallengeModel = { updateMany: async () => ({}), async create(row) { challenges.push(row); return row; } };
+  let resetEmail = "";
+  const app = appWith(createAuthRouter({ UserModel, ChallengeModel, sendEmail: async ({ text }) => { resetEmail = text; return true; } }));
+  try {
+    const response = await request(app, "/api/auth/password/forgot", { email: admin.email });
+    assert.equal(response.status, 200);
+    assert.equal(challenges.length, 1);
+    const resetUrl = new URL(resetEmail.slice(resetEmail.indexOf("https://")));
+    assert.equal(resetUrl.pathname, "/reset-password");
+    assert.equal(resetUrl.searchParams.get("returnTo"), "/admin/login");
+    assert.ok(resetUrl.searchParams.get("token"));
+  } finally {
+    if (previousWebUrl === undefined) delete process.env.WEB_APP_URL;
+    else process.env.WEB_APP_URL = previousWebUrl;
+  }
+});
+
 test("registration rejects an email already used by an account of another role", async () => {
   let createCalled = false;
   const UserModel = {

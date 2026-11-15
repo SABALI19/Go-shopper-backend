@@ -8,7 +8,7 @@
     "dev": "nodemon --watch src --watch .env --ext js,json,env src/server.js",
     "admin:create": "node src/scripts/createAdmin.js",
     "settings:migrate-multi-store-threshold": "node src/scripts/migrateMultiStoreCheckoutMinimum.js",
-    "test": "node --test src/config/database.test.js src/features/orders/reservationWorker.test.js src/routes/auth.test.js src/services/applicationNotificationOutbox.test.js src/routes/checkout.test.js src/routes/orders.test.js src/routes/admin.test.js src/routes/deliveries.test.js src/routes/applications.test.js"
+    "test": "node --test src/config/database.test.js src/features/orders/reservationWorker.test.js src/routes/auth.test.js src/services/applicationNotificationOutbox.test.js src/routes/checkout.test.js src/routes/orders.test.js src/routes/admin.test.js src/routes/deliveries.test.js src/routes/applications.test.js src/routes/stores.test.js src/routes/users.test.js"
   },
   "engines": {
     "node": ">=20"

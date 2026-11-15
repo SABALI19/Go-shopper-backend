@@ -169,7 +169,8 @@ async function issueChallenge(user, purpose) {
   const verificationDestinations = { customer: "/welcome/customer", supermarket: "/register/supermarket", rider: "/register/rider" };
   const returnTo = purpose === "email_verification" ? verificationDestinations[user.role] : undefined;
   const continuation = returnTo ? `&returnTo=${encodeURIComponent(returnTo)}` : "";
-  const href = purpose === "email_verification" ? `${webUrl}/verify-email?token=${encodeURIComponent(value)}${continuation}` : `${webUrl}/reset-password?token=${encodeURIComponent(value)}`;
+  const resetReturnTo = user.role === "admin" ? "/admin/login" : "/sign-in";
+  const href = purpose === "email_verification" ? `${webUrl}/verify-email?token=${encodeURIComponent(value)}${continuation}` : `${webUrl}/reset-password?token=${encodeURIComponent(value)}&returnTo=${encodeURIComponent(resetReturnTo)}`;
   const name = escapeHtml(user.firstName);
   const subject = purpose === "email_verification" ? "Verify your Go-Shopper email" : "Reset your Go-Shopper password";
   return sendEmail({ to: user.email, subject, text: `${purpose === "email_verification" ? "Verify your email" : "Reset your password"}: ${href}`, html: `<p>Hello ${name},</p><p><a href="${escapeHtml(href)}">${purpose === "email_verification" ? "Verify your email address" : "Reset your password"}</a></p><p>This link expires in 10 minutes. If you did not request this, ignore this email.</p>` });
