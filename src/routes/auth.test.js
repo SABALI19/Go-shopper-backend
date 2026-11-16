@@ -65,7 +65,7 @@ test("password reset email returns admins to the dedicated admin sign-in", async
   const challenges = [];
   const admin = { _id: "admin-reset-id", email: "admin@example.com", firstName: "Admin", role: "admin" };
   const UserModel = { findOne: () => query(admin) };
-  const ChallengeModel = { updateMany: async () => ({}), async create(row) { challenges.push(row); return row; } };
+  const ChallengeModel = { findOne: () => query(null), updateMany: async () => ({}), async create(row) { challenges.push(row); return row; } };
   let resetEmail = "";
   const app = appWith(createAuthRouter({ UserModel, ChallengeModel, sendEmail: async ({ text }) => { resetEmail = text; return true; } }));
   try {

@@ -9,8 +9,8 @@ const productAId = "64b000000000000000000101";
 const productBId = "64b000000000000000000102";
 
 const baseStores = [
-  { _id: storeAId, slug: "alpha-market", name: "Alpha Market", isActive: true, isApproved: true },
-  { _id: storeBId, slug: "beta-market", name: "Beta Market", isActive: true, isApproved: true },
+  { _id: storeAId, slug: "alpha-market", name: "Alpha Market", isOpen: true, isSuspended: false, isApproved: true, approvalStatus: "approved" },
+  { _id: storeBId, slug: "beta-market", name: "Beta Market", isOpen: true, isSuspended: false, isApproved: true, approvalStatus: "approved" },
 ];
 
 const baseProducts = [
@@ -163,8 +163,8 @@ test("does not resolve a product under a different supermarket", async () => {
   assert.equal(result.body.issues[0].code, "PRODUCT_NOT_IN_STORE");
 });
 
-test("rejects inactive or unapproved supermarkets", async () => {
-  for (const storeOverride of [{ isActive: false }, { isApproved: false }]) {
+test("rejects closed, suspended, or unapproved supermarkets", async () => {
+  for (const storeOverride of [{ isOpen: false }, { isSuspended: true }, { isApproved: false }]) {
     const result = await quote([{ storeId: "alpha-market", productId: "rice", quantity: 1 }], {
       extraModels: { stores: [{ ...baseStores[0], ...storeOverride }, baseStores[1]] },
     });

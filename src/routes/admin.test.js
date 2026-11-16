@@ -59,7 +59,7 @@ test("settings require integer kobo values, persist changes, and create an audit
 });
 
 test("store approval, rejection reasons, suspension, reactivation, and audit records are enforced", async () => {
-  const store = { _id: "store-id", slug: "fresh", name: "Fresh Mart", isApproved: false, isActive: false, approvalStatus: "pending" };
+  const store = { _id: "store-id", slug: "fresh", name: "Fresh Mart", isApproved: false, isOpen: false, isSuspended: false, approvalStatus: "pending" };
   const audits = [];
   const StoreModel = {
     findOne: () => query(store),
@@ -73,10 +73,10 @@ test("store approval, rejection reasons, suspension, reactivation, and audit rec
   StoreModel.findOne = (filter) => query(filter.slug === "market-two" ? rejectedStore : store);
   StoreModel.findByIdAndUpdate = async (id, update) => { const target = id === rejectedStore._id ? rejectedStore : store; Object.assign(target, update.$set); return { ...target, toObject() { return { ...target }; } }; };
   assert.equal((await request(app, { method: "PATCH", path: "/api/stores/admin/market-two/approval", body: { decision: "rejected", reason: "Missing registration documents" } })).status, 200);
-  assert.equal((await request(app, { method: "PATCH", path: "/api/stores/admin/fresh/status", body: { isActive: false, reason: "Compliance review" } })).status, 200);
-  assert.equal(store.isActive, false);
-  assert.equal((await request(app, { method: "PATCH", path: "/api/stores/admin/fresh/status", body: { isActive: true } })).status, 200);
-  assert.equal(store.isActive, true); assert.deepEqual(audits.map(({ action }) => action), ["store_approved", "store_rejected", "store_suspended", "store_reactivated"]);
+  assert.equal((await request(app, { method: "PATCH", path: "/api/stores/admin/fresh/status", body: { isSuspended: true, reason: "Compliance review" } })).status, 200);
+  assert.equal(store.isSuspended, true);
+  assert.equal((await request(app, { method: "PATCH", path: "/api/stores/admin/fresh/status", body: { isSuspended: false } })).status, 200);
+  assert.equal(store.isSuspended, false); assert.equal(store.isOpen, false); assert.deepEqual(audits.map(({ action }) => action), ["store_approved", "store_rejected", "store_suspended", "store_reactivated"]);
 });
 
 test("customer account search returns sanitized records and blocks admin suspension", async () => {

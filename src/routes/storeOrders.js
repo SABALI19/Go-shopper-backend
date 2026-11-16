@@ -65,7 +65,8 @@ export function createStoreOrdersRouter({
       store: {
         id: access.store.slug,
         name: access.store.name,
-        isActive: access.store.isActive,
+        isOpen: access.store.isOpen,
+        isSuspended: access.store.isSuspended,
         isApproved: access.store.isApproved,
       },
       summary: {
@@ -197,7 +198,7 @@ export function createStoreOrdersRouter({
         if (!isValidSubOrderTransition(subOrder.status, nextStatus)) {
           throw new OrderWorkflowError(409, "INVALID_STATUS_TRANSITION", `Cannot move a sub-order from ${subOrder.status} to ${nextStatus}.`);
         }
-        if (nextStatus === "ready_for_dispatch" && (!access.store.isActive || !access.store.isApproved || access.store.approvalStatus === "rejected" || parent.customerAction?.decision === "pending")) {
+        if (nextStatus === "ready_for_dispatch" && (access.store.isSuspended || !access.store.isApproved || access.store.approvalStatus === "rejected" || parent.customerAction?.decision === "pending")) {
           throw new OrderWorkflowError(409, "STORE_ORDER_NOT_DISPATCHABLE", "This order requires an active approved store and no pending customer decision before pickup readiness.");
         }
         const update = { status: nextStatus };
@@ -289,7 +290,7 @@ const SUB_ORDER_STATUSES = new Set(["pending_payment", "pending_fulfilment", "ac
 
 async function resolveStoreAccess({ req, storeKey, StoreModel, roleProvider }) {
   const stores = await StoreModel.find({ $or: storeLookup(storeKey) })
-    .select("_id slug name ownerUserId isActive isApproved")
+    .select("_id slug name ownerUserId isOpen isSuspended isApproved")
     .lean();
   const isMongoId = /^[a-f\d]{24}$/i.test(storeKey);
   const store = (isMongoId ? stores.find((candidate) => String(candidate._id).toLowerCase() === storeKey.toLowerCase()) : null)

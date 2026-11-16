@@ -22,7 +22,7 @@ export async function resolveCartItems({ items, StoreModel, ProductModel, sessio
   const requestedStoreIds = [...new Set(items.map((item) => item.storeId))];
   const storeFilters = requestedStoreIds.flatMap(storeLookup);
   const stores = await withSession(StoreModel.find({ $or: storeFilters }), session)
-    .select("_id slug name isActive isApproved ownerUserId")
+    .select("_id slug name isOpen isSuspended isApproved ownerUserId approvalStatus")
     .lean();
   const storeByRequestedId = new Map();
   const issues = [];
@@ -34,8 +34,8 @@ export async function resolveCartItems({ items, StoreModel, ProductModel, sessio
     const store = storeByMongoId ?? stores.find((candidate) => candidate.slug === requestedId.toLowerCase());
     if (!store) {
       issues.push({ storeId: requestedId, code: "STORE_NOT_FOUND", message: "This supermarket could not be found." });
-    } else if (!store.isActive || !store.isApproved) {
-      issues.push({ storeId: requestedId, code: "STORE_UNAVAILABLE", message: "This supermarket is not currently available for checkout." });
+    } else if (!store.isOpen || store.isSuspended || !store.isApproved || (store.approvalStatus && store.approvalStatus !== "approved")) {
+      issues.push({ storeId: requestedId, code: "STORE_UNAVAILABLE", message: "This supermarket is closed, suspended, or not approved for checkout." });
     } else {
       storeByRequestedId.set(requestedId, store);
     }

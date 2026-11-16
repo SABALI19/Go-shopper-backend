@@ -35,5 +35,5 @@ test("admin approval uses internal owner IDs, provisions one inactive store, and
   const path = `/api/admin/applications/${application._id}/decision`;
   const first = await request(app, { method: "PATCH", path, body: { decision: "approved" } });
   const second = await request(app, { method: "PATCH", path, body: { decision: "approved" } });
-  assert.equal(first.status, 200); assert.equal(second.body.idempotent, true); assert.equal(stores.length, 1); assert.equal(stores[0].ownerUserId, user._id); assert.equal(stores[0].isActive, false); assert.equal(user.approvalStatus, "approved"); assert.equal(audits.length, 1);
+  assert.equal(first.status, 200); assert.equal(second.body.idempotent, true); assert.equal(stores.length, 1); assert.equal(stores[0].ownerUserId, user._id); assert.equal(stores[0].isOpen, false); assert.equal(stores[0].isSuspended, false); assert.equal(user.approvalStatus, "approved"); assert.equal(audits.length, 1);
 });

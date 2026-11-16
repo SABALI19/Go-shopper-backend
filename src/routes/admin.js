@@ -22,13 +22,13 @@ export function createAdminRouter({
     const [registeredCustomers, totalSupermarkets, activeSupermarkets, pendingStoreApprovals, suspendedStores, orderGroups, recentAudits, recentOrders, recentStores, recentUsers] = await Promise.all([
       UserModel.countDocuments({ role: "customer" }),
       StoreModel.countDocuments({}),
-      StoreModel.countDocuments({ isApproved: true, isActive: true }),
+      StoreModel.countDocuments({ isApproved: true, isOpen: true, isSuspended: { $ne: true } }),
       StoreModel.countDocuments({ $or: [{ approvalStatus: "pending" }, { approvalStatus: { $exists: false }, isApproved: false }] }),
-      StoreModel.countDocuments({ isApproved: true, isActive: false }),
+      StoreModel.countDocuments({ isApproved: true, isSuspended: true }),
       ParentOrderModel.aggregate([{ $group: { _id: { status: "$status", paymentStatus: "$paymentStatus" }, count: { $sum: 1 } } }]),
       AuditModel.find({}).sort({ createdAt: -1 }).limit(8).lean(),
       ParentOrderModel.find({}).select("orderNumber status paymentStatus createdAt").sort({ createdAt: -1 }).limit(5).lean(),
-      StoreModel.find({}).select("slug name approvalStatus isApproved isActive createdAt").sort({ createdAt: -1 }).limit(5).lean(),
+      StoreModel.find({}).select("slug name approvalStatus isApproved isOpen isSuspended createdAt").sort({ createdAt: -1 }).limit(5).lean(),
       UserModel.find({}).select("firstName lastName role createdAt").sort({ createdAt: -1 }).limit(5).lean(),
     ]);
     const counts = { totalParentOrders: 0, awaitingPaymentOrders: 0, confirmedProcessingOrders: 0, completedOrders: 0, cancelledOrders: 0, customerActionRequiredOrders: 0 };
@@ -44,7 +44,7 @@ export function createAdminRouter({
     const activity = [
       ...recentAudits.map((entry) => ({ type: "admin_action", action: entry.action, targetType: entry.targetType, targetId: entry.targetId, reason: entry.reason, createdAt: entry.createdAt })),
       ...recentOrders.map((order) => ({ type: "order", action: `Order ${order.status}`, targetType: "order", targetId: order.orderNumber, paymentStatus: order.paymentStatus, createdAt: order.createdAt })),
-      ...recentStores.map((store) => ({ type: "store", action: store.approvalStatus ?? (store.isApproved ? "approved" : "pending approval"), targetType: "store", targetId: store.slug, name: store.name, isActive: store.isActive, createdAt: store.createdAt })),
+      ...recentStores.map((store) => ({ type: "store", action: store.isSuspended ? "suspended" : store.approvalStatus ?? (store.isApproved ? "approved" : "pending approval"), targetType: "store", targetId: store.slug, name: store.name, isOpen: store.isOpen, isSuspended: store.isSuspended, createdAt: store.createdAt })),
       ...recentUsers.map((user) => ({ type: "user", action: `${user.role} account registered`, targetType: "user", targetId: String(user._id), name: [user.firstName, user.lastName].filter(Boolean).join(" ") || "New account", createdAt: user.createdAt })),
     ].sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime()).slice(0, 10);
     return res.json({ summary: { registeredCustomers, totalSupermarkets, activeSupermarkets, pendingStoreApprovals, suspendedStores, ...counts }, recentActivity: activity });

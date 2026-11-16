@@ -102,7 +102,7 @@ export function createAdminDeliveriesRouter({
         const parent = await ParentOrderModel.findOne({ _id: delivery.parentOrderId, paymentStatus: "paid" }).session(session).lean();
         const eligibleChildStatuses = delivery.pickedUpAt ? ["dispatched"] : ["ready_for_dispatch"];
         const child = await SubOrderModel.findOne({ _id: delivery.subOrderId, storeId: delivery.storeId, status: { $in: eligibleChildStatuses } }).session(session).lean();
-        const store = await StoreModel.findOne({ _id: delivery.storeId, isActive: true, isApproved: true, approvalStatus: "approved" }).session(session).lean();
+        const store = await StoreModel.findOne({ _id: delivery.storeId, isSuspended: { $ne: true }, isApproved: true, approvalStatus: "approved" }).session(session).lean();
         if (!parent || !child || !store) throw new OrderWorkflowError(409, "DELIVERY_NOT_ELIGIBLE", "Only paid orders from an active, approved store can be assigned.");
         const claim = await UserModel.updateOne({ _id: rider._id, role: "rider", isSuspended: { $ne: true }, "riderProfile.approvalStatus": "approved", "riderProfile.isOnline": true, "riderProfile.activeDeliveryId": null }, { $set: { "riderProfile.activeDeliveryId": delivery._id, "riderProfile.isOnline": false } }, { session });
         if ((claim.modifiedCount ?? claim.nModified) !== 1) throw new OrderWorkflowError(409, "RIDER_ALREADY_ASSIGNED", "That rider has just become unavailable. Choose another rider.");

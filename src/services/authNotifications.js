@@ -1,11 +1,17 @@
-export async function sendAuthEmail({ to, subject, text, html }, env = process.env) {
-  if (!env.RESEND_API_KEY || !env.APPLICATION_FROM_EMAIL) return false;
-  const result = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: env.APPLICATION_FROM_EMAIL, to: [to], subject, text, html }),
+import nodemailer from "nodemailer";
+
+export async function sendAuthEmail({ to, subject, text, html }, env = process.env, createTransport = nodemailer.createTransport) {
+  const { BREVO_SMTP_USER, BREVO_SMTP_KEY, APPLICATION_FROM_EMAIL } = env;
+  if (!BREVO_SMTP_USER || !BREVO_SMTP_KEY || !APPLICATION_FROM_EMAIL) return false;
+
+  const port = Number(env.BREVO_SMTP_PORT || 587);
+  const transporter = createTransport({
+    host: env.BREVO_SMTP_HOST || "smtp-relay.brevo.com",
+    port,
+    secure: port === 465,
+    auth: { user: BREVO_SMTP_USER, pass: BREVO_SMTP_KEY },
   });
-  if (!result.ok) throw new Error(`Email provider rejected notification (${result.status}).`);
+  await transporter.sendMail({ from: APPLICATION_FROM_EMAIL, to, subject, text, html });
   return true;
 }
 

@@ -20,7 +20,8 @@ const storeSchema = new mongoose.Schema({
     location: { type: { type: String, enum: ["Point"] }, coordinates: { type: [Number] } },
   },
   openHours: { type: String, trim: true, default: "" },
-  isActive: { type: Boolean, default: true, index: true },
+  isOpen: { type: Boolean, default: false, index: true },
+  isSuspended: { type: Boolean, default: false, index: true },
   isApproved: { type: Boolean, default: false, index: true },
   approvalStatus: { type: String, enum: ["pending", "approved", "rejected"], default: "pending", index: true },
   approvalReason: { type: String, trim: true, maxlength: 500, default: "" },
@@ -29,7 +30,7 @@ const storeSchema = new mongoose.Schema({
 }, { timestamps: true, versionKey: false });
 
 storeSchema.index({ "address.location": "2dsphere" }, { sparse: true });
-storeSchema.index({ isActive: 1, isApproved: 1, category: 1 });
+storeSchema.index({ isOpen: 1, isSuspended: 1, isApproved: 1, category: 1 });
 storeSchema.index({ name: "text", category: "text", tagline: "text" });
 
 export const Store = mongoose.model("Store", storeSchema);

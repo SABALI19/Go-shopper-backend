@@ -8,7 +8,8 @@
     "dev": "nodemon --watch src --watch .env --ext js,json,env src/server.js",
     "admin:create": "node src/scripts/createAdmin.js",
     "settings:migrate-multi-store-threshold": "node src/scripts/migrateMultiStoreCheckoutMinimum.js",
-    "test": "node --test src/config/database.test.js src/features/orders/reservationWorker.test.js src/routes/auth.test.js src/services/applicationNotificationOutbox.test.js src/routes/checkout.test.js src/routes/orders.test.js src/routes/admin.test.js src/routes/deliveries.test.js src/routes/applications.test.js src/routes/stores.test.js src/routes/users.test.js"
+    "stores:migrate-open-suspension": "node src/scripts/migrateStoreOpenAndSuspension.js",
+    "test": "node --test src/config/database.test.js src/features/orders/reservationWorker.test.js src/routes/auth.test.js src/services/applicationNotificationOutbox.test.js src/routes/checkout.test.js src/routes/orders.test.js src/routes/admin.test.js src/routes/deliveries.test.js src/routes/applications.test.js src/routes/stores.test.js src/routes/users.test.js src/scripts/migrateStoreOpenAndSuspension.test.js"
   },
   "engines": {
     "node": ">=20"
@@ -18,7 +19,8 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^5.1.0",
-    "mongoose": "^8.12.1"
+    "mongoose": "^8.12.1",
+    "nodemailer": "^10.6.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"

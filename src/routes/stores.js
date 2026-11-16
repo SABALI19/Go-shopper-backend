@@ -4,17 +4,21 @@ import { Product } from "../models/Product.js";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, requireRoles } from "../middleware/auth.js";
 
-const editableStoreFields = ["name", "category", "tagline", "description", "logoUrl", "coverImageUrl", "categories", "brandValues", "address", "openHours"];
+const editableStoreFields = ["name", "category", "tagline", "description", "logoUrl", "coverImageUrl", "categories", "brandValues", "address", "openHours", "isOpen"];
 const editableProductFields = ["name", "description", "category", "imageUrl", "priceKobo", "stockQuantity", "isAvailable"];
 
 export function createStoresRouter({ StoreModel = Store, ProductModel = Product, authenticate = requireAuth, authorizeSupermarket = requireRoles("supermarket") } = {}) {
   const router = Router();
 
   router.get("/", asyncHandler(async (req, res) => {
-    const filter = { isActive: true, isApproved: true };
+    const filter = publicStoreFilter();
     if (req.query.category) filter.category = String(req.query.category);
     if (req.query.q) filter.$text = { $search: String(req.query.q) };
-    const stores = (await StoreModel.find(filter).sort({ name: 1 }).limit(100).lean()).map((store) => ({ ...store, id: store.slug }));
+    const candidates = await StoreModel.find(filter).sort({ name: 1 }).limit(100).lean();
+    const storeIds = candidates.map((store) => store._id);
+    const stockedStoreIds = storeIds.length ? await ProductModel.distinct("storeId", { storeId: { $in: storeIds }, isAvailable: true, stockQuantity: { $gt: 0 } }) : [];
+    const stocked = new Set(stockedStoreIds.map(String));
+    const stores = candidates.filter((store) => stocked.has(String(store._id))).map((store) => ({ ...store, id: store.slug }));
     res.json({ stores });
   }));
 
@@ -26,7 +30,8 @@ export function createStoresRouter({ StoreModel = Store, ProductModel = Product,
       category: store.category,
       tagline: store.tagline,
       logoUrl: store.logoUrl,
-      isActive: store.isActive,
+      isOpen: store.isOpen,
+      isSuspended: store.isSuspended,
       isApproved: store.isApproved,
       openHours: store.openHours,
     }));
@@ -41,7 +46,8 @@ export function createStoresRouter({ StoreModel = Store, ProductModel = Product,
     payload.ownerUserId = auth.userId;
     payload.isApproved = false;
     payload.approvalStatus = "pending";
-    payload.isActive = false;
+    payload.isOpen = false;
+    payload.isSuspended = false;
     const store = await StoreModel.create(payload);
     res.status(201).json({ store });
   }));
@@ -49,8 +55,9 @@ export function createStoresRouter({ StoreModel = Store, ProductModel = Product,
   router.get("/:storeId", asyncHandler(async (req, res) => {
     const key = req.params.storeId;
     const query = /^[a-f\d]{24}$/i.test(key) ? { _id: key } : { slug: key.toLowerCase() };
-    const storeDoc = await StoreModel.findOne({ ...query, isActive: true, isApproved: true }).lean();
-    const store = storeDoc ? { ...storeDoc, id: storeDoc.slug } : null;
+    const storeDoc = await StoreModel.findOne({ ...query, ...publicStoreFilter() }).lean();
+    const hasAvailableProduct = storeDoc ? await ProductModel.exists({ storeId: storeDoc._id, isAvailable: true, stockQuantity: { $gt: 0 } }) : false;
+    const store = storeDoc && hasAvailableProduct ? { ...storeDoc, id: storeDoc.slug } : null;
     if (!store) return res.status(404).json({ error: { code: "STORE_NOT_FOUND", message: "Store not found" } });
     res.json({ store });
   }));
@@ -58,7 +65,11 @@ export function createStoresRouter({ StoreModel = Store, ProductModel = Product,
   router.patch("/:storeId", authenticate, authorizeSupermarket, asyncHandler(async (req, res) => {
     const key = req.params.storeId;
     const storeKey = /^[a-f\d]{24}$/i.test(key) ? { _id: key } : { slug: key.toLowerCase() };
-    const filter = activeOwnedStoreFilter(storeKey, req.auth.userId);
+    if (Object.keys(req.body || {}).some((field) => !editableStoreFields.includes(field) || ["isSuspended", "status", "isActive"].includes(field))) {
+      return res.status(400).json({ error: { code: "INVALID_STORE_UPDATE", message: "Store owners may update store details and isOpen only." } });
+    }
+    const filter = ownedEditableStoreFilter(storeKey, req.auth.userId);
+    if (Object.hasOwn(req.body || {}, "isOpen") && typeof req.body.isOpen !== "boolean") return res.status(400).json({ error: { code: "INVALID_STORE_OPEN_STATE", message: "isOpen must be true or false." } });
     const update = Object.fromEntries(editableStoreFields.filter((key) => key in (req.body || {})).map((key) => [key, req.body[key]]));
     const store = await StoreModel.findOneAndUpdate(filter, { $set: update }, { new: true, runValidators: true });
     if (!store) return res.status(404).json({ error: { code: "STORE_NOT_FOUND", message: "Store not found, inactive, unapproved, or not managed by this account" } });
@@ -68,9 +79,10 @@ export function createStoresRouter({ StoreModel = Store, ProductModel = Product,
   router.get("/:storeId/products", asyncHandler(async (req, res) => {
     const key = req.params.storeId;
     const query = /^[a-f\d]{24}$/i.test(key) ? { _id: key } : { slug: key.toLowerCase() };
-    const store = await StoreModel.findOne({ ...query, isActive: true, isApproved: true }).select("_id").lean();
+    const store = await StoreModel.findOne({ ...query, ...publicStoreFilter() }).select("_id").lean();
     if (!store) return res.status(404).json({ error: { code: "STORE_NOT_FOUND", message: "Store not found" } });
-    const filter = { storeId: store._id, isAvailable: true };
+    if (!await ProductModel.exists({ storeId: store._id, isAvailable: true, stockQuantity: { $gt: 0 } })) return res.status(404).json({ error: { code: "STORE_NOT_FOUND", message: "Store not found" } });
+    const filter = { storeId: store._id, isAvailable: true, stockQuantity: { $gt: 0 } };
     if (req.query.category) filter.category = String(req.query.category);
     const products = (await ProductModel.find(filter).sort({ name: 1 }).limit(200).lean()).map((product) => ({ ...product, id: product.productKey }));
     res.json({ products });
@@ -79,7 +91,7 @@ export function createStoresRouter({ StoreModel = Store, ProductModel = Product,
   router.post("/:storeId/products", authenticate, authorizeSupermarket, asyncHandler(async (req, res) => {
     const key = req.params.storeId;
     const storeKey = /^[a-f\d]{24}$/i.test(key) ? { _id: key } : { slug: key.toLowerCase() };
-    const store = await StoreModel.findOne(activeOwnedStoreFilter(storeKey, req.auth.userId)).select("_id").lean();
+    const store = await StoreModel.findOne(ownedEditableStoreFilter(storeKey, req.auth.userId)).select("_id").lean();
     if (!store) return res.status(404).json({ error: { code: "STORE_NOT_FOUND", message: "Store not found, inactive, unapproved, or not managed by this account" } });
     const body = req.body || {};
     if (!body.productKey || !body.name || !Number.isSafeInteger(body.priceKobo) || !Number.isSafeInteger(body.stockQuantity)) {
@@ -92,7 +104,7 @@ export function createStoresRouter({ StoreModel = Store, ProductModel = Product,
   router.patch("/:storeId/products/:productId", authenticate, authorizeSupermarket, asyncHandler(async (req, res) => {
     const key = req.params.storeId;
     const storeKey = /^[a-f\d]{24}$/i.test(key) ? { _id: key } : { slug: key.toLowerCase() };
-    const store = await StoreModel.findOne(activeOwnedStoreFilter(storeKey, req.auth.userId)).select("_id").lean();
+    const store = await StoreModel.findOne(ownedEditableStoreFilter(storeKey, req.auth.userId)).select("_id").lean();
     if (!store) return res.status(404).json({ error: { code: "STORE_NOT_FOUND", message: "Store not found, inactive, unapproved, or not managed by this account" } });
     const update = Object.fromEntries(editableProductFields.filter((key) => key in (req.body || {})).map((key) => [key, req.body[key]]));
     const productKey = req.params.productId;
@@ -105,14 +117,18 @@ export function createStoresRouter({ StoreModel = Store, ProductModel = Product,
   return router;
 }
 
-function activeOwnedStoreFilter(storeKey, userId) {
+function ownedEditableStoreFilter(storeKey, userId) {
   return {
     ...storeKey,
     ownerUserId: userId,
-    isActive: true,
+    isSuspended: { $ne: true },
     isApproved: true,
     $or: [{ approvalStatus: "approved" }, { approvalStatus: { $exists: false } }],
   };
+}
+
+function publicStoreFilter() {
+  return { isOpen: true, isSuspended: { $ne: true }, isApproved: true, $or: [{ approvalStatus: "approved" }, { approvalStatus: { $exists: false } }] };
 }
 
 export const storesRouter = createStoresRouter();

@@ -9,8 +9,8 @@ import { createOrdersRouter } from "./orders.js";
 import { createStoreOrdersRouter } from "./storeOrders.js";
 
 const storesSeed = [
-  { _id: "store-db-a", slug: "alpha", name: "Alpha Supermarket", ownerUserId: "store-owner-a", isActive: true, isApproved: true },
-  { _id: "store-db-b", slug: "beta", name: "Beta Supermarket", ownerUserId: "store-owner-b", isActive: true, isApproved: true },
+  { _id: "store-db-a", slug: "alpha", name: "Alpha Supermarket", ownerUserId: "store-owner-a", isOpen: true, isSuspended: false, isApproved: true, approvalStatus: "approved" },
+  { _id: "store-db-b", slug: "beta", name: "Beta Supermarket", ownerUserId: "store-owner-b", isOpen: true, isSuspended: false, isApproved: true, approvalStatus: "approved" },
 ];
 const productsSeed = [
   { _id: "product-db-a", storeId: "store-db-a", productKey: "rice", name: "Rice", priceKobo: 900_000, stockQuantity: 5, isAvailable: true },
@@ -329,6 +329,16 @@ test("allows a single-store order with a tiny merchandise subtotal", async () =>
   world.db.products[0].priceKobo = 1;
   const { order } = await serviceCreate(world);
   assert.equal(order.merchandiseSubtotalKobo, 1);
+});
+
+test("order creation rejects a closed or suspended store before reserving stock", async () => {
+  for (const state of [{ isOpen: false }, { isSuspended: true }]) {
+    const world = makeWorld();
+    Object.assign(world.db.stores[0], state);
+    await assert.rejects(serviceCreate(world), (error) => error.details.issues[0].code === "STORE_UNAVAILABLE");
+    assert.equal(world.db.products[0].stockQuantity, 5);
+    assert.equal(world.db.parents.length, 0);
+  }
 });
 
 test("splits a multi-store checkout into one parent and one child per store", async () => {

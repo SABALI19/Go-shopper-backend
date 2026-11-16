@@ -28,9 +28,9 @@ export function createAdminStoresRouter({ StoreModel = Store, ProductModel = Pro
     if (owner.isSuspended) throw new OrderWorkflowError(409, "SUSPENDED_ACCOUNT", "A suspended user cannot own a store.");
     if (owner.role !== "supermarket" || owner.approvalStatus !== "approved" || !owner.emailVerified || !owner.phoneVerified) throw new OrderWorkflowError(409, "STORE_OWNER_NOT_APPROVED", "The owner must have a verified, admin-approved supermarket account.");
     const slug = `${slugify(name)}-${Date.now().toString(36)}`;
-    const store = await StoreModel.create({ ownerUserId, name, slug, category, description, categories: categories.map((entry) => entry.trim()).filter(Boolean), address: { line1: address.line1?.trim() || "", city: address.city?.trim() || "", state: address.state?.trim() || "", country: address.country?.trim() || "Nigeria" }, openHours, isActive: false, isApproved: true, approvalStatus: "approved" });
+    const store = await StoreModel.create({ ownerUserId, name, slug, category, description, categories: categories.map((entry) => entry.trim()).filter(Boolean), address: { line1: address.line1?.trim() || "", city: address.city?.trim() || "", state: address.state?.trim() || "", country: address.country?.trim() || "Nigeria" }, openHours, isOpen: false, isSuspended: false, isApproved: true, approvalStatus: "approved" });
     const auth = req.auth;
-    await AuditModel.create({ actorUserId: auth.userId, action: "store_created_for_owner", targetType: "store", targetId: store.slug, metadata: { ownerUserId, isActive: false } });
+    await AuditModel.create({ actorUserId: auth.userId, action: "store_created_for_owner", targetType: "store", targetId: store.slug, metadata: { ownerUserId, isOpen: false, isSuspended: false } });
     return res.status(201).json({ store: safeStore(store.toObject ? store.toObject() : store) });
   }));
 
@@ -44,8 +44,8 @@ export function createAdminStoresRouter({ StoreModel = Store, ProductModel = Pro
       else if (req.query.approvalStatus === "approved") filter.$or = [{ approvalStatus: "approved" }, { approvalStatus: { $exists: false }, isApproved: true }];
       else filter.approvalStatus = String(req.query.approvalStatus);
     }
-    if (req.query.status === "active") filter.isActive = true;
-    else if (req.query.status === "suspended") filter.isActive = false;
+    if (req.query.status === "active") filter.isSuspended = { $ne: true };
+    else if (req.query.status === "suspended") filter.isSuspended = true;
     else if (req.query.status && req.query.status !== "all") throw new OrderWorkflowError(400, "INVALID_STORE_STATUS", "status must be active, suspended, or all.");
     const [rows, total] = await Promise.all([
       StoreModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
@@ -90,18 +90,18 @@ export function createAdminStoresRouter({ StoreModel = Store, ProductModel = Pro
   }));
 
   router.patch("/admin/:storeId/status", asyncHandler(async (req, res) => {
-    if (Object.keys(req.body || {}).some((key) => !["isActive", "reason"].includes(key)) || typeof req.body?.isActive !== "boolean") throw new OrderWorkflowError(400, "INVALID_STORE_STATUS", "isActive must be true or false.");
+    if (Object.keys(req.body || {}).some((key) => !["isSuspended", "reason"].includes(key)) || typeof req.body?.isSuspended !== "boolean") throw new OrderWorkflowError(400, "INVALID_STORE_STATUS", "isSuspended must be true or false.");
     const reason = typeof req.body.reason === "string" ? req.body.reason.trim() : "";
-    if ((!req.body.isActive && !reason) || reason.length > 500) throw new OrderWorkflowError(400, "INVALID_SUSPENSION_REASON", "A suspension reason of at most 500 characters is required.");
+    if ((req.body.isSuspended && !reason) || reason.length > 500) throw new OrderWorkflowError(400, "INVALID_SUSPENSION_REASON", "A suspension reason of at most 500 characters is required.");
     const store = await findStore(StoreModel, req.params.storeId);
     if (!store) return res.status(404).json({ error: { code: "STORE_NOT_FOUND", message: "Store not found" } });
-    if (req.body.isActive && !store.isApproved) throw new OrderWorkflowError(409, "STORE_NOT_APPROVED", "A store must be approved before it can be reactivated.");
+    if (!req.body.isSuspended && !store.isApproved) throw new OrderWorkflowError(409, "STORE_NOT_APPROVED", "A store must be approved before suspension can be lifted.");
     const auth = req.auth;
     const updated = await StoreModel.findByIdAndUpdate(store._id, { $set: {
-      isActive: req.body.isActive, suspensionReason: req.body.isActive ? "" : reason,
-      suspendedAt: req.body.isActive ? null : new Date(),
+      isSuspended: req.body.isSuspended, suspensionReason: req.body.isSuspended ? reason : "",
+      suspendedAt: req.body.isSuspended ? new Date() : null,
     } }, { new: true, runValidators: true });
-    await AuditModel.create({ actorUserId: auth.userId, action: req.body.isActive ? "store_reactivated" : "store_suspended", targetType: "store", targetId: store.slug, reason, metadata: { isActive: req.body.isActive } });
+    await AuditModel.create({ actorUserId: auth.userId, action: req.body.isSuspended ? "store_suspended" : "store_reactivated", targetType: "store", targetId: store.slug, reason, metadata: { isSuspended: req.body.isSuspended } });
     return res.json({ store: safeStore(updated.toObject()) });
   }));
 
@@ -135,7 +135,7 @@ function safeStore(store) {
     id: store.slug, slug: store.slug, name: store.name, category: store.category,
     tagline: store.tagline, description: store.description, logoUrl: store.logoUrl,
     coverImageUrl: store.coverImageUrl, address: store.address, openHours: store.openHours,
-    isActive: store.isActive, isApproved: store.isApproved,
+    isOpen: store.isOpen, isSuspended: Boolean(store.isSuspended), isApproved: store.isApproved,
     approvalStatus: store.approvalStatus ?? (store.isApproved ? "approved" : "pending"),
     approvalReason: store.approvalReason ?? "", suspensionReason: store.suspensionReason ?? "",
     suspendedAt: store.suspendedAt ?? null, createdAt: store.createdAt,
