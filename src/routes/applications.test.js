@@ -11,7 +11,7 @@ async function request(app, { method = "GET", path, user = "customer-1", body } 
 
 test("applications require the matching verified account and queue notifications without trusting submitted identity", async () => {
   const records = []; const queued = [];
-  const account = { _id: "customer-1", role: "supermarket", isSuspended: false, email: "verified@example.com", emailVerified: true, phone: "+2348012345678", phoneVerified: true, firstName: "Verified", lastName: "Owner" };
+  const account = { _id: "customer-1", role: "supermarket", isSuspended: false, email: "verified@example.com", emailVerified: true, phone: "+2348012345678", phoneVerified: false, firstName: "Verified", lastName: "Owner" };
   const ApplicationModel = { findOne: () => query(null), async create(value) { const row = { ...value, _id: "application-1", createdAt: new Date() }; records.push(row); return row; } };
   const UserModel = { findById: () => ({ select() { return this; }, lean: () => Promise.resolve(account) }) };
   const app = express(); app.use(express.json()); app.use("/api/applications", createApplicationsRouter({ ApplicationModel, UserModel, authenticate(req, res, next) { const id = req.headers.authorization?.slice(7); if (!id) return res.status(401).json({ error: { code: "UNAUTHORIZED" } }); req.auth = { userId: id }; next(); }, enqueueNotification: async job => { queued.push(job); return { acknowledged: true }; } })); app.use(errorHandler);
@@ -26,7 +26,7 @@ test("applications require the matching verified account and queue notifications
 
 test("admin approval uses internal owner IDs, provisions one inactive store, and is idempotent", async () => {
   const application = { _id: "app-123456", reference: "GS-S-1", type: "supermarket", applicantUserId: "64b000000000000000000003", status: "pending_review", active: true, data: supermarketData, history: [], save: async function () { return this; } };
-  const user = { _id: application.applicantUserId, role: "supermarket", approvalStatus: "pending", emailVerified: true, phoneVerified: true, isSuspended: false, email: "owner@example.com", save: async function () { return this; } };
+  const user = { _id: application.applicantUserId, role: "supermarket", approvalStatus: "pending", emailVerified: true, phoneVerified: false, isSuspended: false, email: "owner@example.com", save: async function () { return this; } };
   const stores = [], audits = [];
   const ApplicationModel = { findById: () => application };
   const UserModel = { findById: id => String(id) === String(user._id) ? user : null };

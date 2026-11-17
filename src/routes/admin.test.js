@@ -32,6 +32,26 @@ async function request(app, { method = "GET", path, userId = "admin-1", body } =
   finally { await new Promise((resolve) => server.close(resolve)); }
 }
 
+test("admin overview includes pending onboarding applications and recent application activity", async () => {
+  const submitted = { _id: "application-1", type: "supermarket", status: "pending_review", reference: "GS-S-NEW", data: { businessName: "Fresh Market" }, createdAt: new Date() };
+  const ApplicationModel = {
+    countDocuments: async (filter) => filter.type === "supermarket" ? 3 : 2,
+    find: () => query([submitted]),
+  };
+  const UserModel = { countDocuments: async () => 4, find: () => query([]) };
+  const StoreModel = { countDocuments: async () => 0, find: () => query([]) };
+  const ParentOrderModel = { aggregate: async () => [], find: () => query([]) };
+  const AuditModel = { find: () => query([]) };
+  const app = makeApp("admin", [{ path: "/api/admin", router: (auth) => createAdminRouter({ ...auth, ApplicationModel, UserModel, StoreModel, ParentOrderModel, AuditModel }) }]);
+  const result = await request(app, { path: "/api/admin/dashboard/summary" });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.summary.pendingApplications, 5);
+  assert.equal(result.body.summary.pendingSupermarketApplications, 3);
+  assert.equal(result.body.summary.pendingRiderApplications, 2);
+  assert.equal(result.body.recentActivity[0].targetId, "GS-S-NEW");
+  assert.equal(result.body.recentActivity[0].name, "Fresh Market");
+});
+
 test("admin endpoints reject unauthenticated, customer, and supermarket users", async () => {
   const app = makeApp("admin", [{ path: "/api/admin", router: createAdminRouter }]);
   assert.equal((await request(app, { path: "/api/admin/settings", userId: null })).status, 401);

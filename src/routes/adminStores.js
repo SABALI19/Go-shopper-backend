@@ -26,7 +26,7 @@ export function createAdminStoresRouter({ StoreModel = Store, ProductModel = Pro
     if (!owner) throw new OrderWorkflowError(404, "STORE_OWNER_NOT_FOUND", "The owner must have a registered Go-Shopper account.");
     const ownerUserId = String(owner._id);
     if (owner.isSuspended) throw new OrderWorkflowError(409, "SUSPENDED_ACCOUNT", "A suspended user cannot own a store.");
-    if (owner.role !== "supermarket" || owner.approvalStatus !== "approved" || !owner.emailVerified || !owner.phoneVerified) throw new OrderWorkflowError(409, "STORE_OWNER_NOT_APPROVED", "The owner must have a verified, admin-approved supermarket account.");
+    if (owner.role !== "supermarket" || owner.approvalStatus !== "approved" || !owner.emailVerified) throw new OrderWorkflowError(409, "STORE_OWNER_NOT_APPROVED", "The owner must have an email-verified, admin-approved supermarket account.");
     const slug = `${slugify(name)}-${Date.now().toString(36)}`;
     const store = await StoreModel.create({ ownerUserId, name, slug, category, description, categories: categories.map((entry) => entry.trim()).filter(Boolean), address: { line1: address.line1?.trim() || "", city: address.city?.trim() || "", state: address.state?.trim() || "", country: address.country?.trim() || "Nigeria" }, openHours, isOpen: false, isSuspended: false, isApproved: true, approvalStatus: "approved" });
     const auth = req.auth;
@@ -62,9 +62,9 @@ export function createAdminStoresRouter({ StoreModel = Store, ProductModel = Pro
     const userId = req.body?.userId;
     if (Object.keys(req.body || {}).some((key) => key !== "userId") || typeof userId !== "string" || !/^[a-f\d]{24}$/i.test(userId)) throw new OrderWorkflowError(400, "INVALID_STORE_OWNER", "Provide a Go-Shopper user ID.");
     const storeFilter = /^[a-f\d]{24}$/i.test(req.params.storeId) ? { _id: req.params.storeId } : { slug: req.params.storeId.toLowerCase() };
-    const [store, owner] = await Promise.all([StoreModel.findOne(storeFilter), UserModel.findById(userId).select("role approvalStatus emailVerified phoneVerified isSuspended")]);
+    const [store, owner] = await Promise.all([StoreModel.findOne(storeFilter), UserModel.findById(userId).select("role approvalStatus emailVerified isSuspended")]);
     if (!store) return res.status(404).json({ error: { code: "STORE_NOT_FOUND", message: "Store not found." } });
-    if (!owner || owner.role !== "supermarket" || owner.approvalStatus !== "approved" || !owner.emailVerified || !owner.phoneVerified || owner.isSuspended) throw new OrderWorkflowError(409, "STORE_OWNER_NOT_APPROVED", "The new owner must be a verified, approved supermarket account.");
+    if (!owner || owner.role !== "supermarket" || owner.approvalStatus !== "approved" || !owner.emailVerified || owner.isSuspended) throw new OrderWorkflowError(409, "STORE_OWNER_NOT_APPROVED", "The new owner must be an email-verified, approved supermarket account.");
     const priorOwnerUserId = store.ownerUserId || "";
     store.ownerUserId = String(owner._id); await store.save();
     await AuditModel.create({ actorUserId: req.auth.userId, action: "store_owner_assigned", targetType: "store", targetId: store.slug, metadata: { priorOwnerUserId, ownerUserId: String(owner._id) } });

@@ -13,19 +13,19 @@ async function request(app, path, body) { const server = app.listen(0, "127.0.0.
 const sha = value => createHash("sha256").update(value).digest("hex");
 
 test("registration normalizes identity, hashes passwords with Argon2id, and never accepts admin signup", async () => {
-  let created; const challenges = []; let verificationEmail = "";
+  let created; const challenges = []; let verificationEmail = ""; let smsSent = false;
   const UserModel = { findOne: () => query(null), async create(value) { created = { ...value, _id: "user-internal-1" }; return created; } };
   const ChallengeModel = { findOne: () => query(null), updateMany: async () => ({}), async create(row) { challenges.push(row); return row; } };
   const previousWebUrl = process.env.WEB_APP_URL;
   process.env.WEB_APP_URL = "https://web.test";
-  const app = appWith(createAuthRouter({ UserModel, ChallengeModel, sendEmail: async ({ text }) => { verificationEmail = text; return true; }, sendSms: async () => true }));
+  const app = appWith(createAuthRouter({ UserModel, ChallengeModel, sendEmail: async ({ text }) => { verificationEmail = text; return true; }, sendSms: async () => { smsSent = true; return true; } }));
   try {
   assert.equal((await request(app, "/api/auth/register/rider", { role: "customer", email: "role-tamper@example.com" })).status, 400);
   assert.equal(created, undefined);
   assert.equal((await request(app, "/api/auth/register/admin", { email: "admin@example.com" })).status, 400);
   assert.equal((await request(app, "/api/auth/register/customer", { role: "admin", email: "role-tamper@example.com" })).status, 400);
   const response = await request(app, "/api/auth/register/customer", { firstName: " Ada ", lastName: "Lovelace", email: " ADA@Example.COM ", phone: "08012345678", password: "a-secure-password" });
-  assert.equal(response.status, 201); assert.equal(created.email, "ada@example.com"); assert.equal(created.phone, "+2348012345678"); assert.equal(created.role, "customer"); assert.notEqual(created.passwordHash, "a-secure-password"); assert.equal(await argon2.verify(created.passwordHash, "a-secure-password"), true); assert.equal(challenges.length, 2); assert.equal("token" in response.body, false);
+  assert.equal(response.status, 201); assert.equal(created.email, "ada@example.com"); assert.equal(created.phone, "+2348012345678"); assert.equal(created.role, "customer"); assert.notEqual(created.passwordHash, "a-secure-password"); assert.equal(await argon2.verify(created.passwordHash, "a-secure-password"), true); assert.equal(challenges.length, 1); assert.equal(challenges[0].purpose, "email_verification"); assert.equal(response.body.verification.phoneVerificationRequired, false); assert.equal(response.body.verification.phoneCodeSent, undefined); assert.equal(smsSent, false); assert.equal("token" in response.body, false);
   const verifyUrl = new URL(verificationEmail.slice(verificationEmail.indexOf("https://")));
   assert.equal(verifyUrl.pathname, "/verify-email"); assert.equal(verifyUrl.searchParams.get("returnTo"), "/welcome/customer");
   } finally {
@@ -49,6 +49,7 @@ test("role-specific registration endpoints assign fixed roles and return applica
       assert.equal(created.role, role);
       assert.equal(created.approvalStatus, role === "customer" ? "approved" : "pending");
       assert.equal(response.body.user.role, role);
+      assert.equal(response.body.verification.phoneVerificationRequired, false);
       const link = verificationEmails.at(-1).slice(verificationEmails.at(-1).indexOf("https://"));
       const verifyUrl = new URL(link);
       assert.equal(verifyUrl.searchParams.get("returnTo"), role === "customer" ? "/welcome/customer" : `/register/${role}`);
@@ -110,9 +111,9 @@ test("email verification consumes the matching challenge and marks only its user
   assert.equal(updated.update.$set.emailVerified, true);
 });
 
-test("login uses normalized email and only issues a short-lived signed token after both verifications", async () => {
+test("login requires email verification only and issues a short-lived signed token", async () => {
   const passwordHash = await argon2.hash("a-secure-password", { type: argon2.argon2id });
-  const account = { _id: "internal-user-id", firstName: "Ada", lastName: "Lovelace", email: "ada@example.com", emailVerified: true, phone: "+2348012345678", phoneVerified: true, role: "customer", approvalStatus: "approved", isSuspended: false, passwordHash, save: async () => account };
+  const account = { _id: "internal-user-id", firstName: "Ada", lastName: "Lovelace", email: "ada@example.com", emailVerified: true, phone: "+2348012345678", phoneVerified: false, role: "customer", approvalStatus: "approved", isSuspended: false, passwordHash, save: async () => account };
   const unverified = { ...account, emailVerified: false };
   let selected = "";
   const UserModel = { findOne(filter) { selected = filter.$or[0].email; return query(selected === "unverified@example.com" ? unverified : account); } };
@@ -139,24 +140,15 @@ test("refresh rotates tokens and reuse revokes the session", async () => {
   assert.equal(reuse.status, 401); assert.ok(session.revokedAt);
 });
 
-test("phone verification stores a hash, limits wrong-code attempts, and marks only the matching user verified", async () => {
-  const user = { _id: "phone-user", email: "phone@example.com", phone: "+2348012345678", phoneVerified: false, save: async () => {} };
+test("resend verification is email-only and phone verification endpoint is disabled", async () => {
+  const user = { _id: "phone-user", email: "phone@example.com", emailVerified: false };
   const challenges = [];
   const UserModel = { findOne: () => query(user) };
-  const ChallengeModel = {
-    findOne(filter) { const selected = filter.purpose === "phone_verification" && filter.expiresAt ? challenges.findLast(row => row.purpose === "phone_verification") || null : null; return { sort() { return this; }, select() { return Promise.resolve(selected); }, then(resolve, reject) { return Promise.resolve(null).then(resolve, reject); } }; },
-    async create(row) { challenges.push({ ...row, save: async () => {} }); },
-    updateMany: async () => ({}),
-  };
-  let deliveredCode = "";
-  const app = appWith(createAuthRouter({ UserModel, ChallengeModel, async sendSms(_phone, code) { deliveredCode = code; return true; } }));
-  // Trigger the public resend flow, then verify using the delivered OTP.
+  const ChallengeModel = { findOne: () => query(null), updateMany: async () => ({}), async create(row) { challenges.push(row); } };
+  const app = appWith(createAuthRouter({ UserModel, ChallengeModel }));
   const resent = await request(app, "/api/auth/resend-verification", { email: user.email });
-  assert.equal(resent.status, 200); assert.equal(challenges.length, 2);
-  const phoneChallenge = challenges.find(row => row.purpose === "phone_verification");
-  assert.equal(deliveredCode.length, 6); assert.notEqual(phoneChallenge.tokenHash, deliveredCode);
-  assert.equal((await request(app, "/api/auth/verify-phone", { email: user.email, code: "000000" })).status, 400);
-  assert.equal(phoneChallenge.attempts, 1);
-  assert.equal((await request(app, "/api/auth/verify-phone", { email: user.email, code: deliveredCode })).status, 200);
-  assert.equal(user.phoneVerified, true); assert.ok(phoneChallenge.consumedAt);
+  assert.equal(resent.status, 200); assert.match(resent.body.message, /email verification/i);
+  assert.equal(challenges.length, 1); assert.equal(challenges[0].purpose, "email_verification");
+  const phoneResult = await request(app, "/api/auth/verify-phone", { email: user.email, code: "123456" });
+  assert.equal(phoneResult.status, 410); assert.equal(phoneResult.body.error.code, "PHONE_VERIFICATION_DISABLED");
 });

@@ -64,7 +64,7 @@ export function createAdminDeliveriesRouter({
     const userId = typeof req.body?.userId === "string" ? req.body.userId.trim() : "";
     const vehicleType = typeof req.body?.vehicleType === "string" ? req.body.vehicleType.trim() : "";
     if (Object.keys(req.body || {}).some((key) => !["userId", "vehicleType"].includes(key)) || !/^[a-f\d]{24}$/i.test(userId) || vehicleType.length > 80) throw new OrderWorkflowError(400, "INVALID_RIDER_PROVISION", "Provide a valid Go-Shopper user ID and optional vehicle type (max 80 characters).");
-    const user = await UserModel.findOne({ _id: userId, role: "rider", isSuspended: { $ne: true }, emailVerified: true, phoneVerified: true });
+    const user = await UserModel.findOne({ _id: userId, role: "rider", isSuspended: { $ne: true }, emailVerified: true });
     if (!user) throw new OrderWorkflowError(404, "RIDER_ACCOUNT_NOT_FOUND", "A verified delivery partner account is required before provisioning.");
     if (user.riderProfile) throw new OrderWorkflowError(409, "RIDER_ALREADY_PROVISIONED", "This delivery partner already has a rider profile.");
     user.approvalStatus = "pending"; user.riderProfile = { approvalStatus: "pending", vehicleType, isOnline: false, activeDeliveryId: null }; await user.save();

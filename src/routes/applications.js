@@ -16,10 +16,10 @@ export function createApplicationsRouter({ ApplicationModel = OnboardingApplicat
     if (!["supermarket", "rider"].includes(type)) throw new OrderWorkflowError(404, "APPLICATION_TYPE_NOT_FOUND", "Application type not found.");
     const auth = req.auth;
     const data = validateData(type, req.body?.data);
-    const account = await UserModel.findById(auth.userId).select("role isSuspended email emailVerified phone phoneVerified firstName lastName").lean();
+    const account = await UserModel.findById(auth.userId).select("role isSuspended email emailVerified phone firstName lastName").lean();
     if (account?.isSuspended) throw new OrderWorkflowError(403, "ACCOUNT_SUSPENDED", "This account cannot submit an application.");
     if (!account || account.role !== type) throw new OrderWorkflowError(403, "ACCOUNT_TYPE_MISMATCH", "Sign in with the account type for this application.");
-    if (!account.emailVerified || !account.phoneVerified) throw new OrderWorkflowError(403, "VERIFICATION_REQUIRED", "Verify your email address and phone number before applying.");
+    if (!account.emailVerified) throw new OrderWorkflowError(403, "VERIFICATION_REQUIRED", "Verify your email address before applying.");
     data.email = account.email; data.phone = account.phone;
     data.fullName = [account.firstName, account.lastName].filter(Boolean).join(" ");
     const current = await ApplicationModel.findOne({ applicantUserId: auth.userId, type, status: { $in: ["pending_review", "under_review", "needs_information"] } }).lean();
@@ -44,8 +44,8 @@ export function createApplicationsRouter({ ApplicationModel = OnboardingApplicat
     if (!application) return res.status(404).json({ error: { code: "APPLICATION_NOT_FOUND", message: "Application not found." } });
     if (application.status !== "needs_information") throw new OrderWorkflowError(409, "APPLICATION_NOT_EDITABLE", "Only applications requesting more information can be updated.");
     const data = validateData(application.type, req.body?.data);
-    const account = await UserModel.findById(auth.userId).select("email phone emailVerified phoneVerified").lean();
-    if (!account?.emailVerified || !account?.phoneVerified) throw new OrderWorkflowError(403, "VERIFICATION_REQUIRED", "Verify your email address and phone number before updating an application.");
+    const account = await UserModel.findById(auth.userId).select("email phone emailVerified").lean();
+    if (!account?.emailVerified) throw new OrderWorkflowError(403, "VERIFICATION_REQUIRED", "Verify your email address before updating an application.");
     data.email = account.email; data.phone = account.phone;
     application.data = data; application.status = "pending_review"; application.feedback = "";
     application.history.push({ status: "pending_review", actorUserId: auth.userId, message: "Applicant resubmitted requested information" });

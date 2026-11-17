@@ -1,19 +1,18 @@
 import { Router } from "express";
 import argon2 from "argon2";
-import { createHash, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { User } from "../models/User.js";
 import { UserSession } from "../models/UserSession.js";
 import { AuthChallenge } from "../models/AuthChallenge.js";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, signAccessToken } from "../middleware/auth.js";
-import { sendAuthEmail, sendPhoneCode } from "../services/authNotifications.js";
+import { sendAuthEmail } from "../services/authNotifications.js";
 
-export function createAuthRouter({ UserModel = User, SessionModel = UserSession, ChallengeModel = AuthChallenge, sendEmail = sendAuthEmail, sendSms = sendPhoneCode } = {}) {
+export function createAuthRouter({ UserModel = User, SessionModel = UserSession, ChallengeModel = AuthChallenge, sendEmail = sendAuthEmail } = {}) {
 const router = Router();
 const accessTtlMs = 15 * 60 * 1000;
 const refreshTtlMs = 30 * 24 * 60 * 60 * 1000;
 const challengeTtlMs = 10 * 60 * 1000;
-const maxAttempts = 5;
 
 const registrationHandler = asyncHandler(async (req, res) => {
   const role = req.registrationRole;
@@ -35,8 +34,7 @@ const registrationHandler = asyncHandler(async (req, res) => {
     throw error;
   }
   const emailSent = await issueChallenge(user, "email_verification").catch(() => false);
-  const phoneCodeSent = await issueChallenge(user, "phone_verification").catch(() => false);
-  return res.status(201).json({ user: publicUser(user), verification: { emailSent, phoneCodeSent, emailRequired: true, phoneRequired: true } });
+  return res.status(201).json({ user: publicUser(user), verification: { emailSent, emailVerificationRequired: true, phoneVerificationRequired: false } });
 });
 for (const role of ["customer", "supermarket", "rider"]) {
   router.post(`/register/${role}`, authRateLimit("register"), (req, _res, next) => { req.registrationRole = role; next(); }, registrationHandler);
@@ -49,7 +47,7 @@ router.post("/login", authRateLimit("login"), asyncHandler(async (req, res) => {
   const phone = normalizePhone(identifier);
   const user = await UserModel.findOne({ $or: [{ email }, ...(phone ? [{ phone, phoneVerified: true }] : [])] }).select("+passwordHash");
   if (!user || !await argon2.verify(user.passwordHash, String(req.body?.password || ""))) return fail(res, 401, "INVALID_CREDENTIALS", "Email/phone or password is incorrect.");
-  if (!user.emailVerified || !user.phoneVerified) return res.status(403).json({ error: { code: "VERIFICATION_REQUIRED", message: "Verify your email address and phone number before signing in.", emailVerified: user.emailVerified, phoneVerified: user.phoneVerified } });
+  if (!user.emailVerified) return res.status(403).json({ error: { code: "VERIFICATION_REQUIRED", message: "Verify your email address before signing in.", emailVerified: user.emailVerified } });
   if (user.isSuspended) return fail(res, 403, "ACCOUNT_SUSPENDED", "This account is suspended. Contact Go-Shopper support.");
   user.lastLoginAt = new Date();
   await user.save();
@@ -66,22 +64,7 @@ router.post("/verify-email", authRateLimit("verify-email"), asyncHandler(async (
   return res.json({ verified: true });
 }));
 
-router.post("/verify-phone", authRateLimit("verify-phone"), asyncHandler(async (req, res) => {
-  const email = normalizeEmail(req.body?.email);
-  const phone = normalizePhone(req.body?.phone);
-  if (!email && !phone) return fail(res, 400, "INVALID_VERIFICATION", "Verification code is invalid or expired.");
-  const user = await UserModel.findOne({ $or: [...(email ? [{ email }] : []), ...(phone ? [{ phone }] : [])] });
-  if (!user) return fail(res, 400, "INVALID_VERIFICATION", "Verification code is invalid or expired.");
-  const challenge = await ChallengeModel.findOne({ userId: user._id, purpose: "phone_verification", consumedAt: null, expiresAt: { $gt: new Date() } }).sort({ createdAt: -1 }).select("+tokenHash");
-  if (!challenge || challenge.attempts >= maxAttempts) return fail(res, 400, "INVALID_VERIFICATION", "Verification code is invalid or expired.");
-  const supplied = hash(String(req.body?.code || ""));
-  challenge.attempts += 1;
-  if (!safeEqual(challenge.tokenHash, supplied)) { await challenge.save(); return fail(res, 400, "INVALID_VERIFICATION", "Verification code is invalid or expired."); }
-  challenge.consumedAt = new Date(); await challenge.save();
-  try { user.phoneVerified = true; await user.save(); }
-  catch (error) { if (error?.code === 11000) return fail(res, 409, "PHONE_ALREADY_VERIFIED", "That verified phone number is already linked to an account."); throw error; }
-  return res.json({ verified: true });
-}));
+router.post("/verify-phone", authRateLimit("verify-phone"), (_req, res) => fail(res, 410, "PHONE_VERIFICATION_DISABLED", "Phone verification is temporarily disabled. Verify your email address to continue."));
 
 router.post("/resend-verification", authRateLimit("resend"), asyncHandler(async (req, res) => {
   const email = normalizeEmail(req.body?.email);
@@ -89,9 +72,8 @@ router.post("/resend-verification", authRateLimit("resend"), asyncHandler(async 
   // Avoid revealing whether an email has an account.
   if (user) {
     if (!user.emailVerified) await issueChallenge(user, "email_verification").catch(() => false);
-    if (!user.phoneVerified) await issueChallenge(user, "phone_verification").catch(() => false);
   }
-  return res.json({ message: "If the account needs verification, a new code has been sent." });
+  return res.json({ message: "If the account needs email verification, a new verification link has been sent." });
 }));
 
 router.post("/password/forgot", authRateLimit("forgot"), asyncHandler(async (req, res) => {
@@ -161,10 +143,10 @@ async function issueChallenge(user, purpose) {
   const now = new Date();
   const recent = await ChallengeModel.findOne({ userId: user._id, purpose, createdAt: { $gt: new Date(Date.now() - 60_000) } }).sort({ createdAt: -1 });
   if (recent) return false;
-  const value = purpose === "phone_verification" ? String(randomInt(0, 1_000_000)).padStart(6, "0") : randomBytes(32).toString("base64url");
+  if (purpose === "phone_verification") return false;
+  const value = randomBytes(32).toString("base64url");
   await ChallengeModel.updateMany({ userId: user._id, purpose, consumedAt: null }, { $set: { consumedAt: now } });
   await ChallengeModel.create({ userId: user._id, purpose, tokenHash: hash(value), expiresAt: new Date(Date.now() + challengeTtlMs), attempts: 0, lastSentAt: now });
-  if (purpose === "phone_verification") return sendSms(user.phone, value);
   const webUrl = String(process.env.WEB_APP_URL || "").replace(/\/$/, "");
   const verificationDestinations = { customer: "/welcome/customer", supermarket: "/register/supermarket", rider: "/register/rider" };
   const returnTo = purpose === "email_verification" ? verificationDestinations[user.role] : undefined;

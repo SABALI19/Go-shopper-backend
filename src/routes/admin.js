@@ -3,6 +3,7 @@ import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, requireRoles } from "../middleware/auth.js";
 import { getCheckoutPricing } from "../config/checkoutPricing.js";
 import { AdminAudit } from "../models/AdminAudit.js";
+import { OnboardingApplication } from "../models/OnboardingApplication.js";
 import { ParentOrder } from "../models/ParentOrder.js";
 import { PlatformSettings } from "../models/PlatformSettings.js";
 import { Store } from "../models/Store.js";
@@ -11,7 +12,7 @@ import { User } from "../models/User.js";
 import { publicParentOrder, OrderWorkflowError } from "../features/orders/service.js";
 
 export function createAdminRouter({
-  UserModel = User, StoreModel = Store, ParentOrderModel = ParentOrder, SubOrderModel = SubOrder,
+  UserModel = User, StoreModel = Store, ParentOrderModel = ParentOrder, SubOrderModel = SubOrder, ApplicationModel = OnboardingApplication,
   AuditModel = AdminAudit, SettingsModel = PlatformSettings, authenticate = requireAuth,
   authorizeAdmin = requireRoles("admin"), pricingProvider = getCheckoutPricing,
 } = {}) {
@@ -19,17 +20,21 @@ export function createAdminRouter({
   router.use(authenticate, authorizeAdmin);
 
   router.get("/dashboard/summary", asyncHandler(async (_req, res) => {
-    const [registeredCustomers, totalSupermarkets, activeSupermarkets, pendingStoreApprovals, suspendedStores, orderGroups, recentAudits, recentOrders, recentStores, recentUsers] = await Promise.all([
+    const activeApplicationFilter = { status: { $in: ["pending_review", "under_review", "needs_information"] } };
+    const [registeredCustomers, totalSupermarkets, activeSupermarkets, pendingStoreApprovals, suspendedStores, pendingSupermarketApplications, pendingRiderApplications, orderGroups, recentAudits, recentOrders, recentStores, recentUsers, recentApplications] = await Promise.all([
       UserModel.countDocuments({ role: "customer" }),
       StoreModel.countDocuments({}),
       StoreModel.countDocuments({ isApproved: true, isOpen: true, isSuspended: { $ne: true } }),
       StoreModel.countDocuments({ $or: [{ approvalStatus: "pending" }, { approvalStatus: { $exists: false }, isApproved: false }] }),
       StoreModel.countDocuments({ isApproved: true, isSuspended: true }),
+      ApplicationModel.countDocuments({ ...activeApplicationFilter, type: "supermarket" }),
+      ApplicationModel.countDocuments({ ...activeApplicationFilter, type: "rider" }),
       ParentOrderModel.aggregate([{ $group: { _id: { status: "$status", paymentStatus: "$paymentStatus" }, count: { $sum: 1 } } }]),
       AuditModel.find({}).sort({ createdAt: -1 }).limit(8).lean(),
       ParentOrderModel.find({}).select("orderNumber status paymentStatus createdAt").sort({ createdAt: -1 }).limit(5).lean(),
       StoreModel.find({}).select("slug name approvalStatus isApproved isOpen isSuspended createdAt").sort({ createdAt: -1 }).limit(5).lean(),
       UserModel.find({}).select("firstName lastName role createdAt").sort({ createdAt: -1 }).limit(5).lean(),
+      ApplicationModel.find({}).select("type status reference data createdAt").sort({ createdAt: -1 }).limit(5).lean(),
     ]);
     const counts = { totalParentOrders: 0, awaitingPaymentOrders: 0, confirmedProcessingOrders: 0, completedOrders: 0, cancelledOrders: 0, customerActionRequiredOrders: 0 };
     for (const group of orderGroups) {
@@ -46,8 +51,10 @@ export function createAdminRouter({
       ...recentOrders.map((order) => ({ type: "order", action: `Order ${order.status}`, targetType: "order", targetId: order.orderNumber, paymentStatus: order.paymentStatus, createdAt: order.createdAt })),
       ...recentStores.map((store) => ({ type: "store", action: store.isSuspended ? "suspended" : store.approvalStatus ?? (store.isApproved ? "approved" : "pending approval"), targetType: "store", targetId: store.slug, name: store.name, isOpen: store.isOpen, isSuspended: store.isSuspended, createdAt: store.createdAt })),
       ...recentUsers.map((user) => ({ type: "user", action: `${user.role} account registered`, targetType: "user", targetId: String(user._id), name: [user.firstName, user.lastName].filter(Boolean).join(" ") || "New account", createdAt: user.createdAt })),
+      ...recentApplications.map((application) => ({ type: "application", action: `${application.type} application ${application.status.replaceAll("_", " ")}`, targetType: `${application.type}_application`, targetId: application.reference, name: application.data?.businessName || application.data?.fullName || application.reference, createdAt: application.createdAt })),
     ].sort((a, b) => new Date(b.createdAt ?? 0).getTime() - new Date(a.createdAt ?? 0).getTime()).slice(0, 10);
-    return res.json({ summary: { registeredCustomers, totalSupermarkets, activeSupermarkets, pendingStoreApprovals, suspendedStores, ...counts }, recentActivity: activity });
+    const pendingApplications = pendingSupermarketApplications + pendingRiderApplications;
+    return res.json({ summary: { registeredCustomers, totalSupermarkets, activeSupermarkets, pendingStoreApprovals, suspendedStores, pendingApplications, pendingSupermarketApplications, pendingRiderApplications, ...counts }, recentActivity: activity });
   }));
 
   router.get("/orders", asyncHandler(async (req, res) => {
